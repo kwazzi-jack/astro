@@ -1,0 +1,17 @@
+[project]
+name = "astropath"
+version = "0.1.0"
+description = "Radio Astronomy AI Assistant"
+readme = "README.md"
+authors = [
+    { name = "Brian Welman", email = "brianallisterwelman@gmail.com" }
+]
+requires-python = ">=3.10"
+dependencies = []
+
+[project.scripts]
+astropath = "astropath:main"
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
