@@ -8,6 +8,7 @@ authors = [
 ]
 requires-python = ">=3.10"
 dependencies = [
+    "appdirs>=1.4.4",
     "langchain>=0.3.21",
     "langchain-community>=0.3.20",
     "langchain-openai>=0.3.10",
@@ -24,3 +25,9 @@ astro = "astro:main"
 [build-system]
 requires = ["hatchling"]
 build-backend = "hatchling.build"
+
+[dependency-groups]
+dev = [
+    "pytest>=8.3.5",
+    "pytest-cov>=6.0.0",
+]
