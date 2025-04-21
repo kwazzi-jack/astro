@@ -1,33 +1,29 @@
 [project]
-name = "astro"
-version = "0.1.0"
-description = "Radio Astronomy AI Assistant"
-readme = "README.md"
-authors = [
-    { name = "Brian Welman", email = "brianallisterwelman@gmail.com" }
-]
-requires-python = ">=3.10"
-dependencies = [
-    "appdirs>=1.4.4",
-    "langchain>=0.3.21",
-    "langchain-community>=0.3.20",
-    "langchain-openai>=0.3.10",
-    "langgraph>=0.3.20",
-    "pylatexenc>=2.10",
-    "python-dotenv>=1.0.1",
-    "rich>=13.9.4",
-    "streamlit>=1.43.2",
-]
+    authors = [
+        { name = "Brian Welman", email = "brianallisterwelman@gmail.com" },
+        { name = "Casey Chuma", email = "caseymovex@gmail.com" },
+    ]
+    name = "astro"
+    version = "0.1.0"
+    description = "Radio Astronomy AI Assistant"
+    readme = "README.md"
+    requires-python = ">=3.10"
+    dependencies = [
+        "appdirs>=1.4.4",
+        "atomic-agents>=1.1.0",
+        "instructor>=1.7.9",
+        "pydantic>=2.10.3",
+        "python-dotenv>=1.0.1",
+        "rich>=13.9.4",
+        "streamlit>=1.43.2",
+    ]
 
-[project.scripts]
-astro = "astro:main"
+    [project.scripts]
+        astro = "astro:main"
 
 [build-system]
-requires = ["hatchling"]
-build-backend = "hatchling.build"
+    requires      = ["hatchling"]
+    build-backend = "hatchling.build"
 
 [dependency-groups]
-dev = [
-    "pytest>=8.3.5",
-    "pytest-cov>=6.0.0",
-]
+    dev = ["pytest>=8.3.5", "pytest-cov>=6.0.0"]
