@@ -1,9 +1,6 @@
 from dotenv import load_dotenv
 
 
-
-
-
 def main():
     # Load environment variables
     load_dotenv()
