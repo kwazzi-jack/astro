@@ -126,6 +126,7 @@ source = { editable = "." }
 dependencies = [
     { name = "appdirs" },
     { name = "atomic-agents" },
+    { name = "docstring-parser" },
     { name = "instructor" },
     { name = "pydantic" },
     { name = "python-dotenv" },
@@ -143,6 +144,7 @@ dev = [
 requires-dist = [
     { name = "appdirs", specifier = ">=1.4.4" },
     { name = "atomic-agents", specifier = ">=1.1.0" },
+    { name = "docstring-parser", specifier = ">=0.16" },
     { name = "instructor", specifier = ">=1.7.9" },
     { name = "pydantic", specifier = ">=2.10.3" },
     { name = "python-dotenv", specifier = ">=1.0.1" },
