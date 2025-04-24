@@ -97,7 +97,7 @@ from astro.simms import SimmsAgent, SimmsHelpText, InitialInputSchema, OutputSch
 agent.register_context_provider("simms help text", SimmsHelpText("Simms Help Text"))
 
 # Display the initial message from the assistant
-console.print(Text("Agent:", style="bold green"), end=" ")
+console.print("[bold green]Astro:[/bold green]", end=" ")
 console.print(Text(initial_message.chat_message))
 
 # Start an infinite loop to handle user inputs and agent responses
@@ -130,6 +130,6 @@ while True:
         agent.memory.add_message("system", response)
         response = agent.run()
 
-    agent_message = Text(response.chat_message, style="bold green")
-    console.print(Text("Astro:", style="bold green"), end=" ")
+    agent_message = Text(response.chat_message)
+    console.print("[bold green]Astro:[/bold green]", end=" ")
     console.print(agent_message)
