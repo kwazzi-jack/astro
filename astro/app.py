@@ -1,44 +1,80 @@
-import enum
-from atomic_agents.agents.base_agent import BaseAgent, BaseAgentConfig
+
+
+import os
+
+from dotenv import load_dotenv
+
+import instructor
+import openai
+from rich.console import Console
+from rich.panel import Panel
+from rich.text import Text
 from atomic_agents.lib.components.system_prompt_generator import SystemPromptGenerator
-from atomic_agents.agents.base_agent import (
-    BaseAgentInputSchema,
-    BaseIOSchema,
-    BaseAgentOutputSchema,
+from atomic_agents.lib.components.agent_memory import AgentMemory
+from atomic_agents.agents.base_agent import BaseAgent, BaseAgentConfig, BaseAgentOutputSchema
+
+# API Key setupTAVILY_API_KEYTAVILY_API_KEYAPI_KEY =   # Replace with your Tavily API key
+load_dotenv()
+API_KEY = os.getenv("OPEN_API_KEY")
+TAVILY_KEY = os.getenv("TAVILY_API_KEY")
+
+# Initialize a Rich Console for pretty console outputs
+console = Console()
+
+# Memory setup
+memory = AgentMemory()
+
+# Initialize memory with an initial message from the assistant
+initial_message = BaseAgentOutputSchema(
+    chat_message="Hey, how can I help you today?"
 )
-from pydantic import BaseModel, Field
+memory.add_message("assistant", initial_message)
 
+# OpenAI client setup using the Instructor library
+# Note, you can also set up a client using any other LLM provider, such as Anthropic, Cohere, etc.
+# See the Instructor library for more information: https://github.com/instructor-ai/instructor
+client = instructor.from_openai(openai.OpenAI(api_key=API_KEY))
 
-class State(enum.Enum):
-    """State enum for the Astro agent. Stipulates which state the agent is in at any moment."""
+# Instead of the default system prompt, we can set a custom system prompt
+system_prompt_generator = SystemPromptGenerator(
+    background=[
+        "This assistant is a general-purpose AI designed to be helpful and friendly.",
+    ],
+    steps=["Understand the user's input and provide a relevant response.", "Respond to the user."],
+    output_instructions=[
+        "Provide helpful and relevant information to assist the user.",
+        "Be friendly and respectful in all interactions.",
+        "Summarize the response instead of returning a lot of overwhelming information."
+        
+    ],
+)
+console.print(Panel(system_prompt_generator.generate_prompt(), width=console.width, style="bold cyan"), style="bold cyan")
 
-    START = enum.auto()
-    END = enum.auto()
+# Agent setup with specified configuration
+agent = BaseAgent(
+    config=BaseAgentConfig(
+        client=client,
+        model="gpt-4o-mini",
+        system_prompt_generator=system_prompt_generator,
+        memory=memory,
+    )
+)
 
+# Display the initial message from the assistant
+console.print(Text("Agent:", style="bold green"), end=" ")
+console.print(Text(initial_message.chat_message, style="bold green"))
 
-class Memory(BaseModel):  # Maybe replace with class variables?
-    """Memory object for the Astro agent. Allows for persistent storage of objects across states."""
+# Start an infinite loop to handle user inputs and agent responses
+while True:
+    # Prompt the user for input with a styled prompt
+    user_input = console.input("[bold blue]You:[/bold blue] ")
+    # Check if the user wants to exit the chat
+    if user_input.lower() in ["/exit", "/quit"]:
+        console.print("Exiting chat...")
+        break
 
-    name: str = Field(..., description="Name of the agent")
-
-
-class InputSchema(BaseAgentInputSchema):
-    """Input schema for Astro agent. Contains the user's latest message to respond too."""
-
-
-class InnerSchema(BaseAgentOutputSchema):
-    """Output schema for Astro agent for internal outputs. Contains Astro's last message
-    in response to their previous state and the new state they should move too."""
-
-    state: State
-
-
-class OuterSchema(BaseAgentOutputSchema):
-    """Output schema for Astro agent for final output. Contains the final message
-    to be displayed"""
-
-
-class Astro:
-    def __init__(self):
-
-        super().__init__(config)
+    # Process the user's input through the agent and get the response and display it
+    response = agent.run(agent.input_schema(chat_message=user_input))
+    agent_message = Text(response.chat_message, style="bold green")
+    console.print(Text("Agent:", style="bold green"), end=" ")
+    console.print(agent_message)
