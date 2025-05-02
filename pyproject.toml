@@ -10,13 +10,19 @@
     requires-python = ">=3.12"
     dependencies = [
         "appdirs>=1.4.4",
-        "atomic-agents>=1.1.0",
         "docstring-parser>=0.16",
         "instructor>=1.7.9",
+        "langchain>=0.3.24",
+        "langchain-anthropic>=0.3.12",
+        "langchain-community>=0.3.23",
+        "langchain-openai>=0.3.15",
+        "langgraph>=0.4.1",
         "pydantic>=2.10.3",
         "python-dotenv>=1.0.1",
+        "pyyaml>=6.0.2",
         "rich>=13.9.4",
         "streamlit>=1.43.2",
+        "tiktoken>=0.9.0",
 ]
 
     [project.scripts]
