@@ -1,0 +1,73 @@
+/* TCSS for Log Viewer App */
+
+Header {
+    dock: top;
+    content-align: center middle;
+    background: rgb(115, 28, 141);
+    color: white;
+}
+
+Footer {
+    dock: bottom;
+    content-align: center middle;
+    background: rgb(115, 28, 141);
+    color: white;
+}
+
+FilterBar {
+    height: 4;
+    width: 100%;
+    align: center middle;
+    align-horizontal: left;
+}
+
+StatusBar {
+    height: 2;
+    width: 100%;
+    /* content-align: left middle; */
+}
+
+RichLog {
+    padding-left: 1;
+    padding-right: 1;
+    align: center middle;
+}
+
+#message-filter {
+    width: 60%;
+    margin: 0 1 0 0;
+}
+
+#level-filter {
+    width: 20%;
+    margin: 0 1 0 0;
+}
+
+/* Create a button group that centers its contents */
+.button-group {
+    width: 20%;
+    align-horizontal: center;
+    content-align: center middle;
+}
+
+Button {
+    min-width: 8;
+    width: 1fr;
+    margin: 0 1 0 0;
+    content-align: center middle;
+}
+
+/* Remove any margin from the last button */
+Button:last-child {
+    margin-right: 2;
+}
+
+LogList {
+    width: 100%;
+    height: 100%;
+}
+
+LogList .datatable--header {
+    height: 1.5;
+    background: transparent;
+}

@@ -1,0 +1,386 @@
+import json
+from datetime import timezone
+import pathlib
+import sys
+import re
+
+import click
+import dateutil.parser
+from rich import print as rprint
+
+# Import Group here
+from rich.console import Console, Group
+from rich.syntax import Syntax
+from rich.panel import Panel
+from rich.text import Text
+
+from astro.logging.base import _LOG_FILE
+
+
+# Helper to parse timestamps robustly, handling various formats and timezones
+def parse_timestamp(timestamp: str):
+    """Parses a timestamp string into a timezone-aware datetime object (UTC)."""
+    try:
+        # Use dateutil.parser for flexibility with ISO 8601 and timezones
+        dt = dateutil.parser.isoparse(timestamp)
+        # Convert to UTC for consistent comparison
+        return dt.astimezone(timezone.utc)
+    except (ValueError, TypeError):
+        return None  # Indicate parsing failure
+
+
+# Corrected format_log_entry function
+def format_log_entry(entry, console):
+    """Formats and prints a single log entry using Rich."""
+    level = entry.get("level", "UNKNOWN")
+    timestamp_str = entry.get("timestamp", "No Timestamp")
+    name = entry.get("name", "No Name")
+    message = entry.get("message", "")
+    exception = entry.get("exception")
+    filename = entry.get("filename", "?")
+    lineno = entry.get("lineno", "?")
+
+    # Color based on level
+    level_colors = {
+        "DEBUG": "dim blue",
+        "INFO": "green",
+        "WARNING": "yellow",
+        "ERROR": "bold red",
+        "CRITICAL": "bold magenta",
+    }
+    level_style = level_colors.get(level.upper(), "white")
+
+    # Attempt to format timestamp nicely, fallback to original string
+    parsed_ts = parse_timestamp(timestamp_str)
+    display_ts = (
+        parsed_ts.strftime("%Y-%m-%d %H:%M:%S %Z") if parsed_ts else timestamp_str
+    )
+
+    header = f"[{level_style}]{level:<8}[/] [{name}] ({filename}:{lineno}) {display_ts}"
+    body = Text(message)
+
+    # Build the main text part first
+    main_text_content = Text(header + "\n", style="dim") + body
+
+    # Add system info to the main text part
+    system_info = entry.get("system", {})
+    if system_info:
+        main_text_content += Text(
+            f"\nSystem: {system_info.get('hostname', '?')} ({system_info.get('platform', '?')})",
+            style="dim italic",
+        )
+
+    # Determine the final renderable for the Panel
+    final_renderable = main_text_content  # Default to just the text content
+
+    if exception:
+        # If there's an exception, create the Syntax object
+        syntax = Syntax(
+            exception.strip(),
+            "python",
+            theme="default",
+            line_numbers=False,
+            background_color="default",
+        )
+        # Use Group to combine the Text and Syntax vertically
+        # Add Text("\n") between them for spacing
+        final_renderable = Group(main_text_content, Text("\n"), syntax)
+
+    # Print the Panel containing either the Text or the Group
+    console.print(Panel(final_renderable, border_style="dim", expand=False))
+
+
+@click.command(context_settings=dict(help_option_names=["-h", "--help"]))
+@click.argument(
+    "logfile_path",
+    type=click.Path(
+        exists=False, dir_okay=False, resolve_path=True, path_type=pathlib.Path
+    ),
+    default=None,
+    required=False,
+)
+@click.option(
+    "--level",
+    "-l",
+    help="Filter by log level (case-insensitive, e.g., ERROR, WARNING).",
+    type=str,
+)
+@click.option(
+    "--min-level",
+    "-L",
+    type=click.Choice(
+        ["DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"], case_sensitive=False
+    ),
+    help="Filter by minimum log level (e.g., WARNING shows WARNING, ERROR, CRITICAL).",
+)
+@click.option("--name", "-n", help="Filter by logger name (exact match).", type=str)
+@click.option(
+    "--message-contains",
+    "-m",
+    help="Filter logs where the message contains this text (case-insensitive).",
+    type=str,
+)
+@click.option(
+    "--message-regex",
+    "-M",
+    help="Filter logs where the message matches this regex (case-sensitive).",
+    type=str,
+)
+@click.option(
+    "--since",
+    help="Show logs at or after this timestamp (ISO 8601 format like YYYY-MM-DDTHH:MM:SS[+/-HH:MM] or YYYY-MM-DD).",
+)
+@click.option("--until", help="Show logs before this timestamp (ISO 8601 format).")
+@click.option("--tail", type=int, help="Show only the last N matching log entries.")
+@click.option(
+    "--raw",
+    is_flag=True,
+    default=False,
+    help="Output raw JSON lines instead of formatted.",
+)
+def view_logs(
+    logfile_path,
+    level,
+    min_level,
+    name,
+    message_contains,
+    message_regex,
+    since,
+    until,
+    tail,
+    raw,
+):
+    """
+    Reads, filters, and displays logs from a JSONL file.
+
+    Defaults to reading from the standard astro log file if no path is given.
+    If '-' is provided as the path, it reads from stdin.
+
+    Log entries are expected to be one JSON object per line.
+
+    Examples:
+
+    \b
+    # View logs from the default log file
+    astro-logs
+
+    \b
+    # View logs from a specific file, filtered by level
+    astro-logs /path/to/other_log.jsonl -l ERROR
+
+    \b
+    # Pipe logs and show only CRITICAL ones (last 10)
+    cat production.log | astro-logs - -L CRITICAL --tail 10
+
+    \b
+    # View default logs containing 'database' since yesterday
+    astro-logs -m "database" --since $(date -Iseconds -d 'yesterday') # Adjust date cmd for OS
+    """
+    out_console = Console(file=sys.stdout)
+    err_console = Console(file=sys.stderr)
+    lines_buffer = []
+
+    # --- Determine Input Source ---
+    input_source = None
+    is_stdin = False
+
+    if logfile_path is None:
+        if _LOG_FILE and _LOG_FILE.exists():
+            input_source = _LOG_FILE
+        elif _LOG_FILE:
+            err_console.print(
+                f"[yellow]Default log file '{_LOG_FILE}' not found. Reading from stdin.[/]",
+            )
+            input_source = sys.stdin
+            is_stdin = True
+        else:
+            err_console.print(
+                "[yellow]No log file specified and default path unknown. Reading from stdin.[/]",
+            )
+            input_source = sys.stdin
+            is_stdin = True
+    elif str(logfile_path) == "-":
+        input_source = sys.stdin
+        is_stdin = True
+    else:
+        if not logfile_path.exists():
+            err_console.print(
+                f"[bold red]Error: Log file not found: {logfile_path}[/]",
+            )
+            sys.exit(1)
+        input_source = logfile_path
+
+    # --- Pre-compile/parse filters ---
+    try:
+        since_dt = parse_timestamp(since) if since else None
+        until_dt = parse_timestamp(until) if until else None
+    except Exception as error:
+        err_console.print(f"[bold red]Error parsing timestamp filter: {error}[/]")
+        sys.exit(1)
+
+    message_re = None
+    if message_regex:
+        try:
+            message_re = re.compile(message_regex)
+        except re.error as error:
+            err_console.print(
+                f"[bold red]Invalid regex for --message-regex: {error}[/]"
+            )
+            sys.exit(1)
+
+    log_level_map = {
+        "DEBUG": 10,
+        "INFO": 20,
+        "WARNING": 30,
+        "ERROR": 40,
+        "CRITICAL": 50,
+    }
+    min_level_num = log_level_map.get(min_level.upper(), 0) if min_level else 0
+
+    # --- Process Logs ---
+    try:
+        if is_stdin:
+            file_handle = input_source
+            _process_stream(
+                file_handle,
+                out_console,
+                err_console,
+                raw,
+                level,
+                min_level_num,
+                name,
+                message_contains,
+                message_re,
+                since_dt,
+                until_dt,
+                tail,
+                lines_buffer,
+                log_level_map,
+            )
+        else:
+            with input_source.open("r", encoding="utf-8") as file_handle:
+                _process_stream(
+                    file_handle,
+                    out_console,
+                    err_console,
+                    raw,
+                    level,
+                    min_level_num,
+                    name,
+                    message_contains,
+                    message_re,
+                    since_dt,
+                    until_dt,
+                    tail,
+                    lines_buffer,
+                    log_level_map,
+                )
+
+    except Exception as error:
+        err_console.print(
+            f"[bold red]An unexpected error occurred during processing: {error}[/]"
+        )
+        import traceback
+
+        traceback.print_exc(file=sys.stderr)
+        sys.exit(1)
+
+    # --- Print Tailed Lines ---
+    if tail:
+        for item in lines_buffer:
+            if raw:
+                rprint(
+                    item
+                )  # Use rich print for raw JSON for consistency? Or standard print?
+            else:
+                format_log_entry(item, out_console)
+
+
+def _process_stream(
+    stream,
+    out_console,
+    err_console,
+    raw,
+    level,
+    min_level_num,
+    name,
+    message_contains,
+    message_re,
+    since_dt,
+    until_dt,
+    tail,
+    lines_buffer,
+    log_level_map,
+):
+    """Helper function to process lines from a file stream or stdin."""
+    processed_count = 0
+    for line_num, line in enumerate(stream, 1):
+        line = line.strip()
+        if not line:
+            continue
+
+        try:
+            entry = json.loads(line)
+            if not isinstance(entry, dict):
+                raise json.JSONDecodeError("Line is not a JSON object", line, 0)
+        except json.JSONDecodeError:
+            if not raw:
+                err_console.print(
+                    f"[yellow]Warning: Skipping invalid JSON on line {line_num}[/]",
+                    # Removed file=sys.stderr as err_console already prints there
+                )
+            continue
+
+        # --- Apply Filters (Inline for brevity) ---
+        entry_level_str = entry.get("level", "")
+        entry_level_num = log_level_map.get(entry_level_str.upper(), 0)
+
+        if level and entry_level_str.lower() != level.lower():
+            continue
+        if min_level_num and entry_level_num < min_level_num:
+            continue
+        if name and entry.get("name", "") != name:
+            continue
+        if (
+            message_contains
+            and message_contains.lower() not in entry.get("message", "").lower()
+        ):
+            continue
+        if message_re and not message_re.search(entry.get("message", "")):
+            continue
+
+        entry_ts_str = entry.get("timestamp")
+        if since_dt or until_dt:
+            entry_dt = parse_timestamp(entry_ts_str)
+            if entry_dt:
+                if since_dt and entry_dt < since_dt:
+                    continue
+                if until_dt and entry_dt >= until_dt:
+                    continue
+            else:
+                if not raw:
+                    err_console.print(
+                        f"[yellow]Warning: Skipping line {line_num} due to unparseable timestamp for filtering: {entry_ts_str}[/]",
+                        # Removed file=sys.stderr
+                    )
+                continue
+
+        # --- Store or Print ---
+        processed_count += 1
+        item_to_store = line if raw else entry
+
+        if tail:
+            lines_buffer.append(item_to_store)
+            if len(lines_buffer) > tail:
+                lines_buffer.pop(0)
+        else:
+            if raw:
+                # Using rprint for raw might apply some Rich formatting, using standard print ensures raw output
+                print(line)
+            else:
+                format_log_entry(entry, out_console)
+
+
+# Example of running directly for testing
+if __name__ == "__main__":
+    view_logs()
