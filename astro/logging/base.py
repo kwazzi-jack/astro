@@ -1,20 +1,49 @@
 # astro/logger.py
 
+import enum
 import logging
 from logging.handlers import TimedRotatingFileHandler
 import json
 import os
+from pathlib import Path
 import platform
 import socket
 import traceback
 import datetime
+from typing import Literal, Self, TypeAlias
 
 from rich.logging import RichHandler
 from rich.theme import Theme
 from rich.console import Console
 
 
-from astro.paths import LOG_DIR
+from astro.paths import LOG_DIR, StrPath
+
+
+# --- Types/Aliases ---
+class LogLevel(enum.IntEnum):
+    CRITICAL = logging.CRITICAL
+    ERROR = logging.ERROR
+    WARNING = logging.WARNING
+    INFO = logging.INFO
+    DEBUG = logging.DEBUG
+
+    @classmethod
+    def from_str(cls, value: str) -> Self:
+        match value.upper():
+            case "CRITICAL":
+                return LogLevel.CRITICAL
+            case "ERROR":
+                return LogLevel.ERROR
+            case "WARNING":
+                return LogLevel.WARNING
+            case "INFO":
+                return LogLevel.INFO
+            case "DEBUG":
+                return LogLevel.DEBUG
+            case _:
+                raise ValueError(f"Unknown log level: {value}")
+
 
 # --- Configuration ---
 _BASE_LOG_LEVEL = logging.INFO
@@ -143,7 +172,7 @@ def setup_logging():
         return
 
     base_logger = logging.getLogger("astro")
-    base_logger.setLevel(_BASE_LOG_LEVEL)
+    base_logger.setLevel(logging.DEBUG)
 
     # Rich handler for console
     console = Console(theme=_CUSTOM_THEME)
@@ -179,10 +208,22 @@ def setup_logging():
     _setup_done = True
 
 
-def get_logger(name: str) -> logging.Logger:
+def get_logger(filepath: StrPath) -> logging.Logger:
     """Retrieves a configured logger instance."""
     setup_logging()
-    logger_name = f"astro.{name}"
+
+    # Convert str to Path
+    if isinstance(filepath, str):
+        filepath = Path(filepath)
+
+    # Extract package level traversal
+    logger_name = filepath.stem
+    for part in reversed(filepath.parts[:-1]):
+        logger_name = f"{part}.{logger_name}"
+        if part == "astro":
+            break
+
+    # Send back logger with package name
     return logging.getLogger(logger_name)
 
 
@@ -190,9 +231,11 @@ def get_logger(name: str) -> logging.Logger:
 setup_logging()
 
 if __name__ == "__main__":
+    from pathlib import Path
+
     print(LOG_DIR)
-    main_logger = get_logger("main_test")
-    util_logger = get_logger("utils_test")
+    main_logger = get_logger(__file__)
+    util_logger = get_logger(Path(__file__).parent / "util.py")
 
     main_logger.debug("Debug message (not shown)")
     main_logger.info("Info message")

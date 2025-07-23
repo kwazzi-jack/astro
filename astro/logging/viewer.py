@@ -31,7 +31,7 @@ from astro.logging.base import _LOG_FILE
 _TEXTUAL_CSS_PATH = get_module_dir(__file__) / "textual.css"
 if not _TEXTUAL_CSS_PATH.exists():
     raise FileNotFoundError(
-        f"Cannot find `{_TEXTUAL_CSS_PATH.name}` at `{_TEXTUAL_CSS_PATH}`"
+        f"Cannot find '{_TEXTUAL_CSS_PATH.name}' at '{_TEXTUAL_CSS_PATH}'"
     )
 
 # Colors for each log level
@@ -123,20 +123,18 @@ class LogDetailPopup(Screen):
                 for key, value in content.items():
                     if value is None:
                         richlog.write(
-                            Text(f"{INDENT}{key.capitalize()}: ", style=key_style)
+                            Text(f"{INDENT}{key.lower()}: ", style=key_style)
                             + Text("None", style=value_style)
                         )
                     elif isinstance(value, (dict, list)) and len(value) > 0:
-                        richlog.write(
-                            Text(f"{INDENT}{key.capitalize()}:", style=key_style)
-                        )
+                        richlog.write(Text(f"{INDENT}{key.lower()}:", style=key_style))
                         recursive_write(
                             value, depth + 1 if depth < max_depth else depth
                         )
                     else:
                         # Handle primitive values
                         richlog.write(
-                            Text(f"{INDENT}{key.capitalize()}: ", style=key_style)
+                            Text(f"{INDENT}{key.lower()}: ", style=key_style)
                             + Text(str(value), style=value_style)
                         )
             elif isinstance(content, list):
@@ -160,27 +158,27 @@ class LogDetailPopup(Screen):
 
         richlog.write(Text("Primary:", style=header_style))
         richlog.write(
-            Text("Log Level: ", style=key_style)
+            Text("log-level: ", style=key_style)
             + Text(f"{entry.pop('level', 'None')}", style=value_style)
         )
         richlog.write(
-            Text("Timestamp: ", style=key_style)
+            Text("timestamp: ", style=key_style)
             + Text(f"{entry.pop('timestamp', 'None')}", style=value_style)
         )
         richlog.write(
-            Text("Name: ", style=key_style)
+            Text("name: ", style=key_style)
             + Text(f"{entry.pop('name', 'None')}", style=value_style)
         )
         richlog.write(
-            Text("Filename: ", style=key_style)
+            Text("filename: ", style=key_style)
             + Text(f"{entry.pop('filename', 'None')}", style=value_style)
         )
         richlog.write(
-            Text("Lineno: ", style=key_style)
+            Text("lineno: ", style=key_style)
             + Text(f"{entry.pop('lineno', 'None')}", style=value_style)
         )
         richlog.write(
-            Text("Message: ", style=key_style)
+            Text("message: ", style=key_style)
             + Text(f"{entry.pop('message', 'None')}", style=value_style)
         )
 
