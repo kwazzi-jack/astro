@@ -104,9 +104,9 @@ Contributions are welcome! Please use GitHub Issues and Pull Requests for bug re
 
 ## License
 
-Astro is open-source. The recommended license is [MIT](https://opensource.org/licenses/MIT), but please ensure the project name "Astro" does not infringe on existing trademarks or copyrights.
+Astro is open-source under the [MIT](https://opensource.org/licenses/MIT).
 
-> **TODO:** Add LICENSE file and confirm naming.
+> **TODO:** Add LICENSE file
 
 ## Contact & Support
 
