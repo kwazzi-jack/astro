@@ -1,7 +1,8 @@
+import json
 import math
 import textwrap
 import shutil
-from typing import Optional
+from typing import Any, Optional
 
 from rich import print as rprint
 
@@ -9,12 +10,40 @@ BASE_INDENT = 4
 SAST_DISPLAY_PATTERN = "%Y/%m/%d %H:%M:%S %Z (%z)"
 
 
-def get_console_shape() -> tuple[int, int]:
+def get_terminal_shape() -> tuple[int, int]:
     return shutil.get_terminal_size()
 
 
-def ideal_console_width() -> int:
-    terminal_width, _ = get_console_shape()
+def get_terminal_width() -> int:
+    terminal_width, _ = get_terminal_shape()
+    return terminal_width if terminal_width >= 40 else 40
+
+
+def get_ideal_terminal_width() -> int:
+    """Calculate the ideal terminal width for display purposes.
+
+    This function determines an optimal terminal width by taking 60% of the current
+    terminal width, with a minimum threshold of 40 characters to ensure readability.
+
+    Returns:
+        int: The ideal terminal width in characters. Always returns at least 40
+             characters, or 60% of the current terminal width, whichever is larger.
+
+    Examples:
+        >>> # Assuming terminal width is 100 characters
+        >>> get_ideal_terminal_width()
+        60
+
+        >>> # Assuming terminal width is 50 characters
+        >>> get_ideal_terminal_width()
+        40
+
+    Note:
+        This function depends on `get_terminal_shape()` to retrieve the current
+        terminal dimensions. The 60% ratio is chosen to provide comfortable
+        reading width while leaving space for other content.
+    """
+    terminal_width, _ = get_terminal_shape()
     ideal_width = math.ceil(terminal_width * 0.6)
     if ideal_width <= 40:
         return 40
@@ -47,7 +76,7 @@ def adaptive_text_wrap(text: str, indent: int = 0) -> str:
     Returns:
         str: Formatted text with indentation, adapted to terminal width
     """
-    terminal_width, _ = get_console_shape()
+    terminal_width, _ = get_terminal_shape()
     return text_wrap(text, width=terminal_width, indent=indent)
 
 
@@ -85,7 +114,7 @@ def format_box(
         A formatted string with box borders
     """
     # Determine width
-    width = max_line_length if max_line_length else ideal_console_width()
+    width = max_line_length if max_line_length else get_ideal_terminal_width()
 
     # Box characters
     border_char = "─"
@@ -129,6 +158,22 @@ def format_box(
     parts.append(footer)
 
     return "\n".join(parts)
+
+
+def prettify_json_string(json_string: str) -> str:
+    """Prettify a JSON string for better readability.
+
+    Args:
+        json_string (str): The JSON string to prettify
+
+    Returns:
+        str: A formatted JSON string with indentation
+    """
+    try:
+        parsed_json = json.loads(json_string)
+        return json.dumps(parsed_json, indent=4, ensure_ascii=False)
+    except json.JSONDecodeError as error:
+        raise ValueError(f"Invalid JSON string: {error}") from error
 
 
 # Example usage

@@ -3,7 +3,7 @@ from numpy.typing import NDArray
 
 from astro.configs.base import Recognition, Speed, Memory
 from astro.utilities.display import rprint
-from astro.utilities.functions import literal_to_tuple
+from astro.utilities.timing import literal_to_tuple
 
 # TODO: Add better scoring function.
 # Currently tries to find closest match, but it does not account for ordinal categories.

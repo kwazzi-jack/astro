@@ -19,7 +19,7 @@ import openai
 from pydantic import BaseModel, Field
 
 from astro.system import BashOutputSchema, command
-from astro.utilities.functions import format_function
+from astro.utilities.timing import format_function
 
 
 class ParserAgent:
