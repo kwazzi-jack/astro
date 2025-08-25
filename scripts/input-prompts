@@ -1,0 +1,38 @@
+# QUICK LOOKUPS
+>>> What does RATT stand for?
+>>> Define SEFD
+>>> MeerKAT antenna diameter?
+
+# ACTION QUERIES - Calculations & Code
+>>> Calculate theoretical noise for 4-hour observation with 16 antennas at 1.4 GHz
+>>> Write a function to convert visibilities to dirty image
+>>> Implement basic gridding algorithm
+>>> Fix baseline calibration errors in my data
+
+# KNOWLEDGE QUERIES - Varied Complexity
+>>> How does W-projection work for wide-field imaging?
+>>> Explain direction-dependent calibration
+>>> Why do we need to calibrate interferometric data?
+>>> What's the difference between natural and uniform weighting?
+
+# AMBIGUOUS QUERIES
+>>> W-projection
+>>> Calibration help
+>>> Noise calculation
+
+# CONVERSATIONAL
+>>> I'm new to radio astronomy, where should I start?
+>>> What's wrong with my image? It has strange stripes across it
+>>> Should I use CARACal or CASA for MeerKAT data?
+
+# MULTI-PART QUERIES
+>>> Calculate the noise for a 4-hour observation with 16 antennas at 1.4 GHz, then write code to simulate it
+>>> Explain what causes phase errors and show how to correct them
+>>> What is DD calibration, why is it needed, and what are the computational costs?
+
+# VERBOSE QUERIES - Same intent as earlier questions but with excessive detail
+>>> Hi there, I'm working on a radio astronomy project and I was wondering if you could help me out. I need to calculate what the theoretical noise would be for an observation I'm planning. The observation will run for about 4 hours, and I'll be using 16 antennas. The center frequency is 1.4 GHz. Could you help me figure out what the noise level would be?
+>>> I've been trying to understand this concept that I keep reading about in papers and textbooks about radio interferometry. It's called W-projection and apparently it's important for wide-field imaging, but I'm not really sure how it actually works. Could you explain the basic principles behind it and why we need to use it when we're doing wide-field observations with telescopes like MeerKAT?
+>>> So I'm a complete beginner to radio astronomy, just started my PhD actually, and I'm feeling a bit overwhelmed by all the different concepts and terminology. I have a physics background but haven't worked with radio telescopes before. My supervisor mentioned I should start learning about interferometry and data processing. Where would you recommend I begin? What are the fundamental concepts I should understand first?
+>>> I need to write some code for my data processing pipeline. Specifically, I need a Python function that can take visibility data from a CASA measurement set file and convert it into an image that I can actually look at and analyze. This would be what I think is called a 'dirty image' before any deconvolution. Can you help me write this function?
+>>> I keep seeing this acronym RATT mentioned in South African radio astronomy contexts and papers related to MeerKAT, and I'm curious what it stands for. Is it an organization, a software package, or something else?

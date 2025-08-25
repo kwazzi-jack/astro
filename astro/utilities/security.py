@@ -1,5 +1,5 @@
-from pathlib import Path
 import zlib
+from pathlib import Path
 
 from astro.logging.base import get_logger
 
@@ -10,7 +10,6 @@ def checksum(
     path: str | Path,
     chunk_size: int = -1,
 ) -> int:
-
     if isinstance(path, str):
         # Convert str to Path
         path = Path(path)
@@ -25,7 +24,6 @@ def checksum(
     total = 0
     logger.debug(f"Running checksum on '{path.name}' with `{chunk_size=}`")
     with open(path, "rb") as file:
-
         # Run with chunks if > 0
         while chunk := file.read(chunk_size):
             total = zlib.crc32(chunk, total)
@@ -37,7 +35,7 @@ def checksum(
 
 def files_differ(file1: str | Path, file2: str | Path, chunk_size: int = -1) -> bool:
     files_equal = checksum(file1, chunk_size) == checksum(file2, chunk_size)
-    logger.debug(f"File '{file1.name}' == File '{file2.name}'? {files_equal}")
+    # FIXME logger.debug(f"File '{file1.name}' == File '{file2.name}'? {files_equal}")
     return not files_equal
 
 

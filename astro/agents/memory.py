@@ -4,7 +4,7 @@ from typing import Any, Optional
 from pydantic import BaseModel, Field
 
 from astro.agents.base import MemoryModule, StrMessage
-from astro.agents.effect import LLMInput, LLMMessage, LLMOutput
+from astro.agents.llm import LLMInput, LLMMessage, LLMOutput
 from astro.utilities.display import get_terminal_width
 
 
@@ -68,9 +68,6 @@ class ChatMemory(MemoryModule[int, LLMMessage]):
 
     def to_llm_input(self) -> LLMInput:
         return LLMInput(messages=self._messages)
-
-    def __getitem__(self, key: Any) -> Any:
-        return super().__getitem__(key)
 
     def __len__(self) -> int:
         """Return the number of messages in memory."""
@@ -209,7 +206,8 @@ if __name__ == "__main__":
     assert len(memory) == 10  # 1 system + 9 conversation messages
 
     # Test last message property
-    last_message = memory.last
+    last_message = memory.last.content
+
     assert last_message == "The current weather in Paris is 18°C and partly cloudy."
     print("✓ Last message retrieved correctly")
 

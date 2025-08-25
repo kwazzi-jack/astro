@@ -1,0 +1,1 @@
+Good {current_period}, how may I assist?

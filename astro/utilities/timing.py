@@ -1,17 +1,7 @@
-from datetime import datetime, timezone
-import math
-from pathlib import Path
 import re
-from typing import (
-    Any,
-    Optional,
-)
-
-import yaml
+from datetime import datetime, timezone
 
 ASTRO_DATETIME_FORMAT = "%Y/%m/%d %H:%M:%S.%f UTC%z"
-
-LiteralType = Any
 
 
 def get_datetime_now() -> datetime:
@@ -19,7 +9,7 @@ def get_datetime_now() -> datetime:
 
 
 def get_timestamp(
-    datet: Optional[datetime] = None, pattern: str = ASTRO_DATETIME_FORMAT
+    datet: datetime | None = None, pattern: str = ASTRO_DATETIME_FORMAT
 ) -> str:
     if datet is None:
         return get_datetime_now().strftime(pattern)
@@ -43,19 +33,30 @@ def timestamp_to_local(timestamp: str, pattern: str = ASTRO_DATETIME_FORMAT) -> 
     return get_timestamp(datetime_to_local(from_timestamp(timestamp, pattern)), pattern)
 
 
-def round_up(number: float, ndigits: int = 0) -> int:
-    offset = math.pow(10, ndigits)
-    return round(math.ceil(number * offset) / offset)
+def get_date_str(dt: datetime) -> str:
+    return dt.strftime("%A, %d %B %Y")
 
 
-def round_down(number: float, ndigits: int = 0) -> int:
-    offset = math.pow(10, ndigits)
-    return round(math.floor(number * offset) / offset)
+def get_time_str(dt: datetime) -> str:
+    time_base = dt.strftime("%H:%M:%S.%f")[:-4]
+    time_offset = dt.strftime("(%Z%z)")
+    return f"{time_base} {time_offset}"
 
 
-def load_yaml(path: str | Path) -> dict[str, Any]:
-    with open(Path(path), "r") as file:
-        return yaml.safe_load(file)
+def get_datetime_str(dt: datetime) -> str:
+    return f"{get_time_str(dt)}, {get_date_str(dt)}"
+
+
+def get_period_str(dt: datetime) -> str:
+    hour = dt.hour
+    if 0 <= hour < 12:
+        return "morning"
+    elif 12 <= hour < 17:
+        return "afternoon"
+    elif 17 <= hour < 24:
+        return "evening"
+    else:
+        raise ValueError(f"Unknown hour value: {hour}")
 
 
 def strtime_to_seconds(time_str: str) -> float:
@@ -147,28 +148,8 @@ def strtime_to_seconds(time_str: str) -> float:
     return value * unit_map[unit]
 
 
-def floor_binary_power(value: int | float) -> int:
-    if not isinstance(value, (int, float)) or value <= 0:
-        raise ValueError("Input must be a positive integer or float")
-
-    if isinstance(value, float):
-        value = int(value)
-
-    return 1 << (value.bit_length() - 1)
-
-
-# def build_function_arguments_model(
-#     function: callable, name: str | None = None
-# ) -> Type[BaseModel]:
-#     fields = {}
-#     arguments = function_arguments_schema(function)
-#     print(arguments)
-#     for argument in arguments:
-#         if argument.optional:
-#             fields[argument.name] = (argument.type, argument.default)
-#         else:
-#             fields[argument.name] = (argument.type, ...)
-
-#     if name is None:
-#         name = classify_str(function.__name__) + "Args"
-#     return create_model(name, **fields)
+if __name__ == "__main__":
+    now = get_datetime_now()
+    print(f"{get_date_str(now)=}")
+    print(f"{get_time_str(now)=}")
+    print(f"{get_period_str(now)=}")
