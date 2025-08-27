@@ -16,7 +16,7 @@ LOG_DIR = ASTRO_DIR / "logs"
 LOG_DIR.mkdir(exist_ok=True)
 
 # Path for configs
-BASE_ENV_PATH = ASTRO_DIR / ".env"
+BASE_ENV_PATH = ASTRO_DIR / ".secrets"
 
 
 def get_module_dir(file_path: str | None = None) -> Path:
@@ -41,6 +41,10 @@ def get_module_dir(file_path: str | None = None) -> Path:
     # Use specified astro file
     else:
         return Path(file_path).parent.resolve()
+
+
+# Installation home
+INSTALL_HOME_DIR = get_module_dir()
 
 
 def read_markdown_file(markdown_file_path: str | Path) -> str:
@@ -73,3 +77,7 @@ def read_markdown_file(markdown_file_path: str | Path) -> str:
         raise OSError(
             f"Error while trying to open markdown file '{markdown_file_path}'"
         ) from error
+
+
+if __name__ == "__main__":
+    print(f"{INSTALL_HOME_DIR=}")

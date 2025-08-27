@@ -13,40 +13,27 @@ Description:
     descriptions from structured context data. Combines the best of structured
     data validation with AI-powered natural language generation.
 
-Dependencies:
-    - pydantic
-    - langchain-core
-    - astro.llms.base
 """
 
-from datetime import datetime
+from collections.abc import Generator
 
 from langchain_core.messages import BaseMessage
 from langchain_core.prompts import AIMessagePromptTemplate, SystemMessagePromptTemplate
 
-from astro.llms.contexts import MainChatContext
+from astro.llms.contexts import ChatContext
 from astro.paths import get_module_dir, read_markdown_file
-from astro.utilities.system import (
-    PlatformDetails,
-    get_platform_details,
-    get_platform_str,
-)
-from astro.utilities.timing import (
-    get_datetime_now,
-    get_datetime_str,
-    get_period_str,
-)
 
 # --- Paths ---
 PROMPT_DIR = get_module_dir(__file__) / "prompt-templates"
 if not PROMPT_DIR.exists():
     raise FileNotFoundError(
-        "Cannot find 'prompt-templates' directory in package. Ensure 'astro' is installed properly."
+        "Cannot find `prompt-templates` directory in package. Ensure `astro` is installed properly."
     )
 
 PROMPT_TEMPLATE_PATHS = {
-    "chat-system-1": PROMPT_DIR / "chat-system-1.prompt.md",
-    "chat-welcome-1": PROMPT_DIR / "chat-welcome-1.prompt.md",
+    "chat-system": PROMPT_DIR / "chat-system.prompt.md",
+    "chat-welcome": PROMPT_DIR / "chat-welcome.prompt.md",
+    "chat-context": PROMPT_DIR / "chat-context.prompt.md",
 }
 
 
@@ -62,37 +49,51 @@ def get_prompt_template(filetag: str) -> str:
     """
     # Validate file tag input
     if filetag not in PROMPT_TEMPLATE_PATHS:
-        raise KeyError(f"File tag '{filetag}' does not exist")
+        raise KeyError(f"File tag `{filetag}` does not exist")
 
     # Return contents of prompt template
     return read_markdown_file(PROMPT_TEMPLATE_PATHS[filetag])
 
 
-def get_main_chat_system_prompt(context: MainChatContext | None = None) -> BaseMessage:
+def get_chat_system_prompt(context: ChatContext | None = None) -> BaseMessage:
     if context is None:
-        context = MainChatContext()
+        context = ChatContext()
 
-    prompt_text = get_prompt_template(filetag="chat-system-1")
+    prompt_text = get_prompt_template(filetag="chat-system")
 
     return SystemMessagePromptTemplate.from_template(prompt_text).format(
-        current_datetime=context.current_datetime,
-        current_platform=context.current_platform,
+        current_datetime=context.current_datetime(),
+        current_platform=context.current_platform(),
+        current_python_environment=context.current_python_environment(),
     )
 
 
-def get_main_chat_welcome_prompt(context: MainChatContext | None = None) -> BaseMessage:
+def get_chat_welcome_prompt(context: ChatContext | None = None) -> BaseMessage:
     if context is None:
-        context = MainChatContext()
+        context = ChatContext()
 
-    prompt_text = get_prompt_template(filetag="chat-welcome-1")
+    prompt_text = get_prompt_template(filetag="chat-welcome")
 
     return AIMessagePromptTemplate.from_template(prompt_text).format(
         current_period=context.current_period
     )
 
 
+def get_chat_context_prompt_generator(
+    context: ChatContext | None = None,
+) -> Generator[BaseMessage, None, None]:
+    if context is None:
+        context = ChatContext()
+
+    prompt_text = get_prompt_template(filetag="chat-context")
+    prompt_template = SystemMessagePromptTemplate.from_template(prompt_text)
+
+    while True:
+        yield prompt_template.format(current_datetime=context.current_datetime())
+
+
 if __name__ == "__main__":
-    prompt = get_main_chat_system_prompt()
+    prompt = get_chat_system_prompt()
     prompt.pretty_print()
-    prompt = get_main_chat_welcome_prompt()
+    prompt = get_chat_welcome_prompt()
     prompt.pretty_print()

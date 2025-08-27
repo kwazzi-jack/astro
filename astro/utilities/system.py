@@ -1,10 +1,18 @@
 import os
 import platform
+import shutil
 import subprocess
+import sys
 from pathlib import Path
 
 import distro
 from pydantic import BaseModel, Field
+
+from astro.paths import INSTALL_HOME_DIR
+
+
+def is_exe_installed(exe_name: str) -> bool:
+    return shutil.which(exe_name) is not None
 
 
 def _check_dockerenv_file() -> bool:
@@ -404,9 +412,221 @@ def get_platform_str(platform_info: PlatformDetails) -> str:
     return result
 
 
+# Python Environment Detection
+def _check_uv_environment() -> tuple[bool, str | None]:
+    """Check for UV (Astral) package manager environment."""
+    # Check for UV environment variable
+    if os.environ.get("UV_PROJECT_ENVIRONMENT"):
+        return True, "uv (via UV_PROJECT_ENVIRONMENT)"
+
+    # Check for uv.lock in current directory
+    if (Path.cwd() / "uv.lock").exists():
+        return True, "uv (uv.lock detected)"
+
+    # Check if running in UV-managed venv
+    venv_path = os.environ.get("VIRTUAL_ENV")
+    if venv_path and Path(venv_path).name == ".venv":
+        # Check if parent has uv.lock
+        try:
+            parent = Path(venv_path).parent
+            if (parent / "uv.lock").exists():
+                return True, "uv (.venv with uv.lock)"
+        except Exception:
+            pass
+
+    # Check for executable
+    if is_exe_installed("uv") or is_exe_installed("uvx"):
+        return True, "uv (executable found)"
+
+    return False, None
+
+
+def _check_poetry_environment() -> tuple[bool, str | None]:
+    """Check for Poetry environment."""
+    # Check Poetry environment variable
+    if os.environ.get("POETRY_ACTIVE"):
+        return True, "poetry (POETRY_ACTIVE)"
+
+    # Check for poetry.lock in current directory
+    if (Path.cwd() / "poetry.lock").exists():
+        return True, "poetry (poetry.lock detected)"
+
+    # Check for executable
+    if is_exe_installed("poetry"):
+        return True, "poetry (executable found)"
+
+    return False, None
+
+
+def _check_conda_environment() -> tuple[bool, str | None]:
+    """Check for Conda environment."""
+    conda_env = os.environ.get("CONDA_DEFAULT_ENV")
+    if conda_env:
+        conda_prefix = os.environ.get("CONDA_PREFIX", "")
+        return True, f"conda ({conda_env})"
+
+    # Check for conda-meta directory
+    conda_prefix = os.environ.get("CONDA_PREFIX")
+    if conda_prefix and Path(conda_prefix, "conda-meta").exists():
+        return True, "conda (conda-meta detected)"
+
+    # Check for executable
+    if is_exe_installed("conda"):
+        return True, "conda (executable found)"
+
+    return False, None
+
+
+def _check_pyenv_environment() -> tuple[bool, str | None]:
+    """Check for Pyenv environment."""
+    # Check pyenv environment variable
+    pyenv_version = os.environ.get("PYENV_VERSION")
+    if pyenv_version:
+        return True, f"pyenv ({pyenv_version})"
+
+    # Check for executable
+    if is_exe_installed("pyenv"):
+        return True, "pyenv (executable found)"
+
+    return False, None
+
+
+def _check_venv_environment() -> tuple[bool, str | None]:
+    """Check for standard venv environment."""
+    venv_path = os.environ.get("VIRTUAL_ENV")
+    if venv_path is None:
+        return False, None
+
+    venv_name = Path(venv_path).name
+
+    # Check for pyvenv.cfg
+    pyvenv_cfg = Path(venv_path, "pyvenv.cfg")
+    if pyvenv_cfg.exists():
+        return True, f"venv ({venv_name})"
+
+    return True, f"venv-like ({venv_name})"
+
+
+def _check_pipenv_environment() -> tuple[bool, str | None]:
+    """Check for Pipenv environment."""
+    if os.environ.get("PIPENV_ACTIVE") is not None:
+        return True, "pipenv (PIPENV_ACTIVE)"
+
+    # Check for Pipfile in current directory
+    if (Path.cwd() / "Pipfile").exists():
+        return True, "pipenv (Pipfile detected)"
+
+    # Check for executable
+    if is_exe_installed("pipenv"):
+        return True, "pipenv (executable found)"
+
+    return False, None
+
+
+def _get_python_version() -> str:
+    """Get current Python version."""
+    version_info = sys.version_info
+    return f"{version_info.major}.{version_info.minor}.{version_info.micro}"
+
+
+class PythonEnvironmentDetails(BaseModel):
+    """Pydantic model for Python environment information."""
+
+    version: str
+    environment_type: str
+    environment_details: str | None = None
+    virtual_env_active: bool = False
+    virtual_env_name: str | None = None
+    potential_issues: list[str] = Field(default_factory=list)
+
+
+def get_python_environment_details() -> PythonEnvironmentDetails:
+    """
+    Detect comprehensive Python environment information.
+
+    Returns:
+        PythonEnvironmentDetails model containing:
+        - version: Python version string
+        - environment_type: Type of Python environment
+        - environment_details: Additional details about the environment
+        - virtual_env_active: Whether a virtual environment is active
+        - virtual_env_name: Name of the virtual environment if active
+        - potential_issues: List of detected issues
+    """
+    version = _get_python_version()
+
+    # Check environment types in order of specificity
+    environment_checks = [
+        ("uv", _check_uv_environment),
+        ("poetry", _check_poetry_environment),
+        ("conda", _check_conda_environment),
+        ("pipenv", _check_pipenv_environment),
+        ("pyenv", _check_pyenv_environment),
+        ("venv", _check_venv_environment),
+    ]
+
+    for env_name, check_func in environment_checks:
+        try:
+            is_active, details = check_func()
+            if is_active:
+                venv_path = os.environ.get("VIRTUAL_ENV")
+                venv_name = Path(venv_path).name if venv_path else None
+
+                return PythonEnvironmentDetails(
+                    version=version,
+                    environment_type=env_name,
+                    environment_details=details,
+                    virtual_env_active=bool(venv_path),
+                    virtual_env_name=venv_name,
+                )
+        except Exception:
+            continue
+
+    # Default to native Python
+    return PythonEnvironmentDetails(
+        version=version,
+        environment_type="native",
+        environment_details="System Python installation",
+        virtual_env_active=False,
+        virtual_env_name=None,
+    )
+
+
+def get_python_environment_str(python_info: PythonEnvironmentDetails) -> str:
+    """Format Python environment information as a concise string."""
+    result = f"`python{python_info.version}`"
+
+    # Add environment type
+    if python_info.environment_type != "native":
+        result += f" (via `{python_info.environment_type}`"
+        if python_info.virtual_env_active and python_info.virtual_env_name:
+            result += f": `{python_info.virtual_env_name}`"
+        result += ")"
+
+    # Add issues if any (but keep brief for privacy)
+    if (
+        python_info.potential_issues is not None
+        and len(python_info.potential_issues) > 0
+    ):
+        issue_count = len(python_info.potential_issues)
+        result += f" [{issue_count} potential issue{'s' if issue_count > 1 else ''}]"
+
+    return result
+
+
+def get_python_version_str(python_info: PythonEnvironmentDetails) -> str:
+    return python_info.version
+
+
 # Example usage and testing
 if __name__ == "__main__":
     from astro.utilities.display import rprint
 
     platform_info = get_platform_details()
+    python_info = get_python_environment_details()
+
     rprint(platform_info)
+    rprint(python_info)
+
+    print(f"Platform: {get_platform_str(platform_info)}")
+    print(f"Python: {get_python_environment_str(python_info)}")

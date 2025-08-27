@@ -1,26 +1,15 @@
 from typing import Any
 
-from langchain_core.messages import AIMessage, BaseMessage, HumanMessage, SystemMessage
-
-from astro.llms import ModelName, ModelProvider, create_conversational_model
-from astro.llms.base import ChatModel, LLMConfig
-from astro.llms.contexts import ChatContext
-from astro.llms.prompts import (
-    get_chat_context_prompt_generator,
-    get_chat_system_prompt,
-    get_chat_welcome_prompt,
-)
+from astro.llms.base import ModelName, ModelProvider
 
 
-class AstroChatAgent:
+class CodeAgent:
     def __init__(
         self,
         identifier: str | ModelName | ModelProvider = "ollama",
         provider: str | ModelProvider | None = None,
         model_overrides: dict[str, Any] | None = None,
-        system_prompt_tag: str = "chat-system",
-        welcome_prompt_tag: str = "chat-welcome",
-        context_prompt_tag: str | None = "chat-context",
+        system_prompt_tag: str = "code-small-system",
     ) -> None:
         # Default attributes
         self._identifier: str | ModelName | ModelProvider = identifier
@@ -94,24 +83,3 @@ class AstroChatAgent:
 
         # Return content of assistant response
         return response.content
-
-
-if __name__ == "__main__":
-    from astro.utilities.display import astro_md_print, md_print, user_md_input
-
-    astro = AstroChatAgent("openai")
-    astro_md_print(astro._messages[0].content)
-
-    try:
-        while True:
-            user_input = user_md_input().strip()
-            if user_input.lower()[0] == "q" or user_input.lower() == "exit":
-                md_print("\n**>> EXITING <<**")
-                exit(0)
-
-            response = astro.act(user_input)
-            astro_md_print(astro._messages[-2].content)
-            astro_md_print(response)
-    except KeyboardInterrupt:
-        md_print("\n**>> INTERRUPTED <<**")
-        exit(0)

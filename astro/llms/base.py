@@ -32,10 +32,12 @@ from langchain_ollama import ChatOllama
 from langchain_openai.chat_models import ChatOpenAI
 from pydantic import (
     BaseModel,
+    SecretStr,
 )
 
-from astro.llms.contexts import MainChatContext
-from astro.llms.prompts import get_main_chat_system_prompt, get_main_chat_welcome_prompt
+from astro.llms.contexts import ChatContext
+from astro.llms.prompts import get_chat_system_prompt, get_chat_welcome_prompt
+from astro.utilities.security import get_secret_key
 from astro.utilities.timing import get_datetime_now
 
 ChatModel: TypeAlias = ChatAnthropic | ChatOllama | ChatOpenAI
@@ -172,6 +174,7 @@ class LLMConfig(BaseModel):
     gpu_count: int | None = None
     thread_count: int | None = None
     keep_alive: bool = False
+    api_key: str | None = None
 
     @classmethod
     def _handle_identifier_only(
@@ -410,6 +413,7 @@ class LLMConfig(BaseModel):
             "gpu_count": None,
             "thread_count": None,
             "keep_alive": False,
+            "api_key": None,
         }
 
         # Merge overrides onto defaults (overrides wins)
@@ -476,6 +480,11 @@ def create_chat_model(llm_config: LLMConfig) -> ChatModel:
                 if llm_config.reasoning
                 else None
             )
+            api_key = (
+                get_secret_key("OPENAI_API_KEY")
+                if llm_config.api_key is None
+                else get_secret_key(llm_config.api_key)
+            )
             return ChatOpenAI(
                 model=llm_config.model_name,
                 temperature=llm_config.temperature,
@@ -489,6 +498,7 @@ def create_chat_model(llm_config: LLMConfig) -> ChatModel:
                 timeout=llm_config.timeout,
                 seed=llm_config.seed,
                 n=llm_config.count,
+                api_key=api_key,
             )
 
         case ModelProvider.ANTHROPIC:
@@ -497,6 +507,11 @@ def create_chat_model(llm_config: LLMConfig) -> ChatModel:
                 {"type": "enabled", "budget_tokens": 2000}
                 if llm_config.reasoning
                 else None
+            )
+            api_key = (
+                get_secret_key("ANTHROPIC_API_KEY")
+                if llm_config.api_key is None
+                else get_secret_key(llm_config.api_key)
             )
             return ChatAnthropic(
                 model=llm_config.model_name,  # pyright: ignore[reportCallIssue]
@@ -508,6 +523,7 @@ def create_chat_model(llm_config: LLMConfig) -> ChatModel:
                 thinking=thinking_config,
                 max_retries=llm_config.max_retries,
                 timeout=llm_config.timeout,
+                api_key=api_key,
             )  # pyright: ignore[reportCallIssue]
 
         case ModelProvider.OLLAMA:
@@ -604,7 +620,7 @@ def create_conversational_model(
     identifier: str | ModelName | ModelProvider,
     provider: str | ModelProvider | None = None,
     **overrides: Any,
-) -> ChatModel:
+) -> tuple[ChatModel, LLMConfig]:
     """Create a conversational chat model with optimized defaults.
 
     Args:
@@ -614,20 +630,22 @@ def create_conversational_model(
         ChatModel: Configured chat model instance optimized for conversation
     """
     config = LLMConfig.for_conversational(identifier, provider=provider, **overrides)
-    return create_chat_model(config)
+    return create_chat_model(config), config
 
 
 if __name__ == "__main__":
     from langchain_core.messages import BaseMessage, HumanMessage
 
-    bot = create_conversational_model("gemma3:4b", thinking=False, reasoning=False)
+    bot = create_conversational_model("gpt-4o", thinking=False, reasoning=False)
     print(f"{bot=}")
     first_think = False
     first_output = False
-    current_context = MainChatContext()
-    system_message = get_main_chat_system_prompt(current_context)
-    welcome_message = get_main_chat_welcome_prompt(current_context)
-    user_message = HumanMessage("How do I install python on my system?")
+    current_context = ChatContext()
+    system_message = get_chat_system_prompt(current_context)
+    welcome_message = get_chat_welcome_prompt(current_context)
+    user_message = HumanMessage(
+        "How could I create an academically formal matplotlib plot that takes in my fits file of a radio galaxy at MGC_1h22s.fits?"
+    )
     messages: list[BaseMessage] = [system_message, welcome_message, user_message]
     response = bot.invoke(messages)
     messages.append(response)

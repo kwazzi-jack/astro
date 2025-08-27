@@ -1,13 +1,47 @@
 import json
 import math
-import textwrap
 import shutil
-from typing import Any, Optional
+import textwrap
+from typing import IO, Any, Optional
 
+from langchain_core.messages import BaseMessage
 from rich import print as rprint
+from rich.markdown import Markdown
+from rich.prompt import Prompt
 
 BASE_INDENT = 4
 SAST_DISPLAY_PATTERN = "%Y/%m/%d %H:%M:%S %Z (%z)"
+
+
+def md_print(
+    text: str,
+    sep: str = " ",
+    end: str = "\n",
+    file: IO[str] | None = None,
+    flush: bool = False,
+):
+    rprint(Markdown(text), sep=sep, end=end, file=file, flush=flush)
+
+
+def astro_md_print(message: Any):
+    if isinstance(message, BaseMessage):
+        content = message.content
+    else:
+        content = message
+    md_print(f"> **ASTRO:**\n\n{content}\n")
+
+
+def user_md_print(message: Any):
+    if isinstance(message, BaseMessage):
+        content = message.content
+    else:
+        content = message
+    md_print(f"> **USER:**\n\n{content}\n")
+
+
+def user_md_input() -> str:
+    md_print("> **USER:**\n")
+    return Prompt.ask("")
 
 
 def get_terminal_shape() -> tuple[int, int]:
@@ -98,7 +132,7 @@ def format_box(
     fields: dict[str, str],
     label_width: int = 13,
     field_padding: int = 2,
-    max_line_length: Optional[int] = None,
+    max_line_length: int | None = None,
 ) -> str:
     """
     Format agent information in a pretty box.
