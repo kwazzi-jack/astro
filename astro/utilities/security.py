@@ -5,7 +5,7 @@ from dotenv import dotenv_values
 from pydantic import SecretStr
 
 from astro.loggings.base import get_logger
-from astro.paths import _BASE_SECRETS_PATH, ASTRO_DIR
+from astro.paths import _ASTRO_DIR, _BASE_SECRETS_PATH
 
 logger = get_logger("astro.utilities.security")
 

@@ -16,7 +16,7 @@ from rich.console import Console
 from rich.logging import RichHandler
 from rich.theme import Theme
 
-from astro.paths import _LOG_DIR, StrPath
+from astro.typings import StrPath
 
 
 # --- Types/Aliases ---
@@ -46,7 +46,12 @@ class LogLevel(enum.IntEnum):
 
 # --- Configuration ---
 _BASE_LOG_LEVEL = logging.INFO
-_LOG_FILE = _LOG_DIR / "astro.jsonl"  # JSONL file for structured logs
+
+
+def _get_log_file():
+    """Get the log file path, importing _LOG_DIR lazily to avoid circular imports."""
+    from astro.paths import _LOG_DIR
+    return _LOG_DIR / "astro.jsonl"
 
 # Internal flag to ensure setup runs only once
 _setup_done = False
@@ -190,7 +195,7 @@ def setup_logging():
 
     # JSONL handler for file
     file_handler = TimedRotatingFileHandler(
-        filename=_LOG_FILE,
+        filename=_get_log_file(),
         when="midnight",
         interval=1,
         backupCount=14,  # Two weeks of logs
@@ -231,6 +236,7 @@ setup_logging()
 
 if __name__ == "__main__":
     from pathlib import Path
+    from astro.paths import _LOG_DIR
 
     print(_LOG_DIR)
     main_logger = get_logger(__file__)
@@ -247,4 +253,4 @@ if __name__ == "__main__":
         main_logger.exception("Exception occurred")
 
     main_logger.critical("Get help. We are melting")
-    print(f"\nCheck console output and JSONL logs at '{_LOG_FILE}'")
+    print(f"\nCheck console output and JSONL logs at '{_get_log_file()}'")

@@ -8,8 +8,6 @@ from pathlib import Path
 import distro
 from pydantic import BaseModel, Field
 
-from astro.paths import INSTALL_HOME_DIR
-
 
 def is_exe_installed(exe_name: str) -> bool:
     return shutil.which(exe_name) is not None

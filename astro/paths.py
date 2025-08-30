@@ -4,22 +4,91 @@ from collections.abc import ItemsView, Iterator, KeysView, ValuesView
 from pathlib import Path
 from typing import Any, Generic, TypeAlias
 
-from astro.loggings import get_logger
-from astro.typings import (
-    ModelType,
-    PathDict,
-    TraceableModel,
+# Lazy logger import to avoid circular dependency
+from astro.errors import (
     _expected_got_var_value_error,
     _expected_key_str_value_error,
     _expected_key_type_value_error,
     _expected_value_type_value_error,
     _no_entry_key_error,
+)
+from astro.typings import (
+    ModelType,
+    PathDict,
+    TraceableModel,
+    _options_to_str,
     _path_dict_to_str_dict,
     _str_dict_to_path_dict,
     _type_name,
 )
 
 _logger = None
+
+
+def _get_logger():
+    """Get logger instance with lazy initialization to avoid circular imports."""
+    global _logger
+    if _logger is None:
+        from astro.loggings import get_logger
+
+        _logger = get_logger(__file__)
+    return _logger
+
+
+def get_module_dir(file_path: str | None = None) -> Path:
+    """Get the directory path of a module.
+    Args:
+        file_path (str | None, optional): Path to a specific file. If None, returns the parent
+            directory of the current module. Defaults to None.
+    Returns:
+        Path: The resolved directory path. If file is None, returns the parent directory
+            of the current module's parent directory. Otherwise, returns the parent
+            directory of the specified file.
+    Example:
+        >>> get_module_dir()
+        PosixPath('/home/brian/PhD/astro')
+        >>> get_module_dir('/path/to/some/file.py')
+        PosixPath('/path/to/some')
+    """
+    # Use astro/paths.py as reference
+    if file_path is None:
+        return Path(__file__).parent.parent.resolve()
+
+    # Use specified astro file
+    else:
+        return Path(file_path).parent.resolve()
+
+
+def read_markdown_file(markdown_file_path: str | Path) -> str:
+    """Read and return the contents of a markdown file.
+    Args:
+        markdown_file_path (str | Path): Path to the markdown file to read.
+            Can be either a string path or a Path object.
+    Returns:
+        str: The contents of the markdown file with leading and trailing
+            whitespace stripped.
+    Raises:
+        FileNotFoundError: If the specified file does not exist.
+        RuntimeError: If there are issues reading the file (permissions, etc.).
+    """
+
+    # If string file path, convert to Path
+    if isinstance(markdown_file_path, str):
+        markdown_file_path = Path(markdown_file_path)
+
+    # Validate file exists
+    if not markdown_file_path.exists():
+        raise FileNotFoundError(f"File `{markdown_file_path}` does not exist")
+
+    # Return contents of markdown file
+    try:
+        with open(markdown_file_path, encoding="utf-8") as file:
+            return file.read().strip()
+    # Error while opening file
+    except Exception as error:
+        raise OSError(
+            f"Error while trying to open markdown file '{markdown_file_path}'"
+        ) from error
 
 
 class ModelFileStore(Generic[ModelType]):
@@ -495,23 +564,64 @@ class ModelFileStore(Generic[ModelType]):
         return f"ModelFileStore(root_dir={self.root_dir!r}, model_type={self.model_type!r})"
 
 
-# Astro's home
-HOME_DIR = Path.home()
-ASTRO_DIR = HOME_DIR / ".astro"
-ASTRO_DIR.mkdir(exist_ok=True)
+# Global path variables - initialized by setup_paths()
+_HOME_DIR: Path | None = None
+_ASTRO_DIR: Path | None = None
+_INSTALL_HOME_DIR: Path | None = None
 
-# Path for logs
-_LOG_DIR = ASTRO_DIR / "logs"
-_LOG_DIR.mkdir(exist_ok=True)
+_LOG_DIR: Path | None = None
+_BASE_SECRETS_PATH: Path | None = None
+_STATE_DIR: Path | None = None
+_STORES_DIR: Path | None = None
 
-# Path for configs
-_BASE_SECRETS_PATH = ASTRO_DIR / ".secrets"
+# Paths setup flag
+_PATH_SETUP_DONE = False
 
-# State and store directories
-_STATE_DIR = ASTRO_DIR / "state"
-_STATE_DIR.mkdir(exist_ok=True)
-_STORES_DIR = _STATE_DIR / "stores"
-_STORES_DIR.mkdir(exist_ok=True)
+
+def setup_paths():
+    """Initialize all path constants and create necessary directories.
+
+    This function must be called before using any path-dependent functionality.
+    Creates the directory structure if it doesn't exist.
+    """
+    global \
+        _HOME_DIR, \
+        _ASTRO_DIR, \
+        _LOG_DIR, \
+        _BASE_SECRETS_PATH, \
+        _STATE_DIR, \
+        _STORES_DIR, \
+        _PATH_SETUP_DONE
+
+    if _PATH_SETUP_DONE:
+        return
+
+    try:
+        # Astro's home
+        _HOME_DIR = Path.home()
+        _ASTRO_DIR = _HOME_DIR / ".astro"
+        _ASTRO_DIR.mkdir(exist_ok=True)
+
+        # Path for logs
+        _LOG_DIR = _ASTRO_DIR / "logs"
+        _LOG_DIR.mkdir(exist_ok=True)
+
+        # Path for configs
+        _BASE_SECRETS_PATH = _ASTRO_DIR / ".secrets"
+
+        # State and store directories
+        _STATE_DIR = _ASTRO_DIR / "state"
+        _STATE_DIR.mkdir(exist_ok=True)
+        _STORES_DIR = _STATE_DIR / "stores"
+        _STORES_DIR.mkdir(exist_ok=True)
+
+    # Something went wrong when setting up paths
+    except Exception as error:
+        raise IOError("Error occurred while setting up paths") from error
+
+    # Flag that paths are setup
+    _PATH_SETUP_DONE = True
+
 
 # Useful type aliases
 ModelTypeDict: TypeAlias = dict[str, type[TraceableModel]]
@@ -597,6 +707,10 @@ def _is_store_dir(dir_path: Path) -> bool:
 def _setup_store_map():
     global _STORE_MAP
 
+    # Issue with missing path
+    if not _PATH_SETUP_DONE or _STORES_DIR is None:
+        raise RuntimeError("Either pathing is not setup or stores directory is not set")
+
     # Only setup once
     if len(_STORE_MAP) != 0:
         return
@@ -625,8 +739,30 @@ def _setup_store_map():
         else:
             store_path.unlink()
 
+    # Ensure all white-listed model types have a store
+    for model_name, model_type in _STORE_WHITE_LIST_MAP.items():
+        if model_name not in _STORE_MAP:
+            store_path = _STORES_DIR / model_name
+            model_store = ModelFileStore[model_type](
+                root_dir=store_path, model_type=model_type
+            )
+            _STORE_MAP[model_store.name] = model_store
+
 
 def setup_store():
+    """Set up the model file store system.
+
+    This is separate from path setup and handles TraceableModel serialization.
+
+    Raises:
+        RuntimeError: If paths have not been initialized via setup_paths().
+    """
+    # Check if paths are initialized
+    if _ASTRO_DIR is None:
+        raise RuntimeError(
+            "Paths not initialized. Call setup_paths() before setup_store()."
+        )
+
     # Load white list
     _load_store_white_list()
 
@@ -668,68 +804,200 @@ def get_model_file_store(model_type: type[TraceableModel]) -> ModelFileStore:
     return _STORE_MAP[model_name]
 
 
-def get_module_dir(file_path: str | None = None) -> Path:
-    """Get the directory path of a module.
-    Args:
-        file_path (str | None, optional): Path to a specific file. If None, returns the parent
-            directory of the current module. Defaults to None.
-    Returns:
-        Path: The resolved directory path. If file is None, returns the parent directory
-            of the current module's parent directory. Otherwise, returns the parent
-            directory of the specified file.
-    Example:
-        >>> get_module_dir()
-        PosixPath('/home/brian/PhD/astro')
-        >>> get_module_dir('/path/to/some/file.py')
-        PosixPath('/path/to/some')
-    """
-    # Use astro/paths.py as reference
-    if file_path is None:
-        return Path(__file__).parent.parent.resolve()
+def save_model_file_to_store(model_file: TraceableModel):
+    # Extract input type
+    model_type = type(model_file)
 
-    # Use specified astro file
-    else:
-        return Path(file_path).parent.resolve()
+    # Input type validation
+    if not isinstance(model_file, TraceableModel):
+        raise _expected_got_var_value_error(
+            var_name="model_type", got=model_type, expected=TraceableModel
+        )
 
+    # Not a valid model file to store
+    if model_type.__name__ not in _STORE_WHITE_LIST_MAP:
+        raise _no_entry_key_error(key_value=model_type.__name__)
 
-# Installation home
-INSTALL_HOME_DIR = get_module_dir()
-
-
-def read_markdown_file(markdown_file_path: str | Path) -> str:
-    """Read and return the contents of a markdown file.
-    Args:
-        markdown_file_path (str | Path): Path to the markdown file to read.
-            Can be either a string path or a Path object.
-    Returns:
-        str: The contents of the markdown file with leading and trailing
-            whitespace stripped.
-    Raises:
-        FileNotFoundError: If the specified file does not exist.
-        RuntimeError: If there are issues reading the file (permissions, etc.).
-    """
-
-    # If string file path, convert to Path
-    if isinstance(markdown_file_path, str):
-        markdown_file_path = Path(markdown_file_path)
-
-    # Validate file exists
-    if not markdown_file_path.exists():
-        raise FileNotFoundError(f"File `{markdown_file_path}` does not exist")
-
-    # Return contents of markdown file
     try:
-        with open(markdown_file_path, encoding="utf-8") as file:
-            return file.read().strip()
-    # Error while opening file
+        # Get model file store
+        model_store = get_model_file_store(model_type)
+
+        # Add new model to store
+        model_store.add_model(model_file)
+
+    # Error occurred while trying to load file store and save model
     except Exception as error:
-        raise OSError(
-            f"Error while trying to open markdown file '{markdown_file_path}'"
+        raise RuntimeError(
+            f"Error occurred while saving model {model_file.uid} to store for `{model_type.__name__}` type"
         ) from error
 
 
+def load_model_file_from_store(key: str) -> TraceableModel:
+    # Input type validation
+    if not isinstance(key, str):
+        raise _expected_key_str_value_error(got=type(key))
+
+    # Check stores for entry
+    matches: list[ModelFileStore] = []
+    for store in _STORE_MAP.values():
+        # If entry in store -> add match
+        if key in store:
+            matches.append(store)
+
+    # No matches
+    if len(matches) == 0:
+        raise _no_entry_key_error(key_value=key)
+
+    # Contains duplicates -> UID matching problem
+    if len(matches) > 1:
+        matches_str = _options_to_str([store.name for store in matches])
+        raise ValueError(
+            f"Duplicate UID `{key}` found in multiple stores: {matches_str}"
+        )
+
+    # Get store
+    model_store = matches[0]
+    try:
+        # Return model from model store
+        return model_store.get_model(key)
+    except Exception as error:
+        raise RuntimeError(
+            f"Error occurred while loading model {key} from store `{model_store.name}`"
+        ) from error
+
+
+def remove_model_file_from_store(*keys: str):
+    """Remove model files from their respective stores by UID.
+
+    Args:
+        *keys: One or more string UIDs of models to remove from stores.
+
+    Raises:
+        ValueError: If any key is not a string.
+        KeyError: If any key is not found in any store.
+        RuntimeError: If an error occurs while removing models from stores.
+    """
+    # Input type validation for all keys
+    for key in keys:
+        if not isinstance(key, str):
+            raise _expected_key_str_value_error(got=type(key))
+
+    # Process each key
+    for key in keys:
+        # Check stores for entry
+        matches: list[ModelFileStore] = []
+        for store in _STORE_MAP.values():
+            # If entry in store -> add match
+            if key in store:
+                matches.append(store)
+
+        # No matches
+        if len(matches) == 0:
+            raise _no_entry_key_error(key_value=key)
+
+        # Contains duplicates -> UID matching problem
+        if len(matches) > 1:
+            matches_str = _options_to_str([store.name for store in matches])
+            raise ValueError(
+                f"Duplicate UID `{key}` found in multiple stores: {matches_str}"
+            )
+
+        # Get store and remove model
+        model_store = matches[0]
+        try:
+            model_store.remove_model(key)
+        except Exception as error:
+            raise RuntimeError(
+                f"Error occurred while removing model {key} from store `{model_store.name}`"
+            ) from error
+
+
+def clear_model_file_store(*model_types: type[TraceableModel]):
+    """Clear all entries from the specified model file stores.
+
+    Args:
+        *model_types: One or more TraceableModel types whose stores should be cleared.
+
+    Raises:
+        ValueError: If any model_type is not a subclass of TraceableModel.
+        KeyError: If any model_type is not found in the store whitelist.
+        RuntimeError: If an error occurs while clearing stores.
+    """
+    # Input type validation for all model types
+    for model_type in model_types:
+        if not isinstance(model_type, type) or not issubclass(
+            model_type, TraceableModel
+        ):
+            raise _expected_got_var_value_error(
+                var_name="model_type", got=model_type, expected=type[TraceableModel]
+            )
+
+    # Process each model type
+    for model_type in model_types:
+        # Extract name
+        model_name = model_type.__name__
+
+        # Entry not found in store map
+        if model_name not in _STORE_WHITE_LIST_MAP or model_name not in _STORE_MAP:
+            raise _no_entry_key_error(key_value=model_name)
+
+        # Get the store and clear it
+        try:
+            model_store = _STORE_MAP[model_name]
+            model_store.clear()
+        except Exception as error:
+            raise RuntimeError(
+                f"Error occurred while clearing store for `{model_name}` type"
+            ) from error
+
+
 # Run when loading module
-setup_store()
+setup_paths()
 
 if __name__ == "__main__":
+    _STORES_DIR = Path("./test_store/")
+    if _STORES_DIR.exists():
+        shutil.rmtree(_STORES_DIR)
+        _STORES_DIR.mkdir()
+    else:
+        _STORES_DIR.mkdir()
     setup_store()
+
+    # Test path setup functionality
+    print("=== Path Setup Test ===")
+    print(f"HOME_DIR: {_HOME_DIR}")
+    print(f"ASTRO_DIR: {_ASTRO_DIR}")
+    print(f"LOG_DIR: {_LOG_DIR}")
+    print(f"STORES_DIR: {_STORES_DIR}")
+    print(f"Path setup done: {_PATH_SETUP_DONE}")
+
+    # Test logger functionality
+    print("\n=== Logger Test ===")
+    logger = _get_logger()
+    logger.info("Testing logger functionality from paths.py")
+    print(f"Logger created: {logger.name}")
+
+    # Test store functionality (if LLMConfig is available)
+    print("\n=== Store Test ===")
+
+    from astro.llms import LLMConfig
+
+    # Create a test LLMConfig instance
+    test_config = LLMConfig.for_conversational(identifier="ollama")
+    print(f"Created test LLMConfig: {test_config.uid}")
+
+    # Save to store
+    save_model_file_to_store(test_config)
+    print("Saved LLMConfig to store")
+
+    # Load from store
+    loaded_config = load_model_file_from_store(test_config.uid)
+    print(f"Loaded LLMConfig from store: {loaded_config.uid}")
+    print(f"Model names match: {test_config.model_name == _type_name(loaded_config)}")
+
+    # Test store clearing
+    print(f"Store length before clear: {len(get_model_file_store(LLMConfig))}")
+    # clear_model_file_store(LLMConfig)
+    print(f"Store length after clear: {len(get_model_file_store(LLMConfig))}")
+
+    print("\n=== Path and Store Test Complete ===")
