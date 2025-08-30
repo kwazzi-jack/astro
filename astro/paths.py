@@ -4,7 +4,6 @@ from collections.abc import ItemsView, Iterator, KeysView, ValuesView
 from pathlib import Path
 from typing import Any, Generic, TypeAlias
 
-# Lazy logger import to avoid circular dependency
 from astro.errors import (
     _expected_got_var_value_error,
     _expected_key_str_value_error,
@@ -22,16 +21,29 @@ from astro.typings import (
     _type_name,
 )
 
+# Global logger variable
 _logger = None
 
 
 def _get_logger():
-    """Get logger instance with lazy initialization to avoid circular imports."""
+    """Get or initialize the global logger for paths module.
+
+    Returns the global logger instance, creating it if it hasn't been initialized yet.
+    The logger is configured using the astro.loggings module. Only function like this
+    due to circular import issue of logging directory path.
+
+    Returns:
+        The logger instance for this module.
+    """
     global _logger
+
+    # If no logger -> set one
     if _logger is None:
         from astro.loggings import get_logger
 
         _logger = get_logger(__file__)
+
+    # Return logger, initialized or pre-initialized
     return _logger
 
 
@@ -50,13 +62,20 @@ def get_module_dir(file_path: str | None = None) -> Path:
         >>> get_module_dir('/path/to/some/file.py')
         PosixPath('/path/to/some')
     """
+    logger = _get_logger()
+    logger.debug(f"Getting module directory for file_path: {file_path}")
+
     # Use astro/paths.py as reference
     if file_path is None:
-        return Path(__file__).parent.parent.resolve()
+        result = Path(__file__).parent.parent.resolve()
+        logger.debug(f"Using current module reference, returning: {result}")
+        return result
 
     # Use specified astro file
     else:
-        return Path(file_path).parent.resolve()
+        result = Path(file_path).parent.resolve()
+        logger.debug(f"Using specified file path, returning: {result}")
+        return result
 
 
 def read_markdown_file(markdown_file_path: str | Path) -> str:
@@ -71,21 +90,30 @@ def read_markdown_file(markdown_file_path: str | Path) -> str:
         FileNotFoundError: If the specified file does not exist.
         RuntimeError: If there are issues reading the file (permissions, etc.).
     """
+    logger = _get_logger()
+    logger.debug(f"Reading markdown file: {markdown_file_path}")
 
     # If string file path, convert to Path
     if isinstance(markdown_file_path, str):
         markdown_file_path = Path(markdown_file_path)
+        logger.debug(f"Converted string path to Path object: {markdown_file_path}")
 
     # Validate file exists
     if not markdown_file_path.exists():
+        logger.error(f"Markdown file does not exist: {markdown_file_path}")
         raise FileNotFoundError(f"File `{markdown_file_path}` does not exist")
 
     # Return contents of markdown file
     try:
         with open(markdown_file_path, encoding="utf-8") as file:
-            return file.read().strip()
+            contents = file.read().strip()
+            logger.info(
+                f"Successfully read markdown file: {markdown_file_path} ({len(contents)} characters)"
+            )
+            return contents
     # Error while opening file
     except Exception as error:
+        logger.error(f"Failed to read markdown file {markdown_file_path}: {error}")
         raise OSError(
             f"Error while trying to open markdown file '{markdown_file_path}'"
         ) from error
@@ -124,18 +152,24 @@ class ModelFileStore(Generic[ModelType]):
             `ValueError`: If model_type is not a subclass of `TraceableModel`.
             `IOError`: If `ModelFileStore` encounters an error while saving or loading the index file.
         """
+        logger = _get_logger()
+        logger.debug(
+            f"Initializing ModelFileStore for {model_type.__name__ if hasattr(model_type, '__name__') else model_type} at {root_dir}"
+        )
 
         # Create assigned directory if it does not exist
         root_dir.mkdir(exist_ok=True)
+        logger.debug(f"Created/verified directory: {root_dir}")
 
         # Validate `model_type` is subclass of `TraceableModel`
         if not (
             isinstance(model_type, type) and issubclass(model_type, TraceableModel)
         ):
+            logger.error(f"Invalid model type for ModelFileStore: {model_type}")
             raise _expected_got_var_value_error(
                 var_name="model_type",
                 got=model_type,
-                expected=f"subclass of {TraceableModel}",
+                expected=TraceableModel,
             )
 
         # Attributes
@@ -145,14 +179,22 @@ class ModelFileStore(Generic[ModelType]):
         self._index_file = root_dir / "index"
         self._index_map = {}  # type: PathDict
 
+        logger.debug(f"Set up ModelFileStore attributes for {self._name}")
+
         # Index file present -> load from file
         if self._index_file.exists():
+            logger.debug(f"Loading existing index file: {self._index_file}")
             self._index_map = self._load_index()
+            logger.info(
+                f"Loaded {len(self._index_map)} entries from existing index for {self._name}"
+            )
 
         # No index file -> create clean file
         else:
+            logger.debug(f"Creating new index file: {self._index_file}")
             self._index_map = {}
             self._save_index()
+            logger.info(f"Created new empty index for {self._name}")
 
     @property
     def name(self) -> str:
@@ -612,6 +654,7 @@ def setup_paths():
         # State and store directories
         _STATE_DIR = _ASTRO_DIR / "state"
         _STATE_DIR.mkdir(exist_ok=True)
+
         _STORES_DIR = _STATE_DIR / "stores"
         _STORES_DIR.mkdir(exist_ok=True)
 
@@ -643,20 +686,36 @@ def _load_store_white_list():
         Restart the application if changes to the white list are needed, as it
         is not re-created if already populated.
     """
+    logger = _get_logger()
+    logger.debug("Loading store white list")
 
     global _STORE_WHITE_LIST_MAP
-
-    # List of TraceableModels to white list
-    # IMPORTANT - B - This governs which models can be stored
-    from astro.llms import LLMConfig
 
     # Non-empty list will not get re-created
     # IMPORTANT - B - restart Astro instead
     if len(_STORE_WHITE_LIST_MAP):
+        logger.debug(
+            f"Store white list already loaded with {len(_STORE_WHITE_LIST_MAP)} entries"
+        )
         return
 
-    # Create list based on above
-    _STORE_WHITE_LIST_MAP = {LLMConfig.__name__: LLMConfig}
+    try:
+        # List of TraceableModels to white list
+        # IMPORTANT - B - This governs which models can be stored
+        from astro.llms import LLMConfig
+
+        # Create list based on above
+        _STORE_WHITE_LIST_MAP = {LLMConfig.__name__: LLMConfig}
+        logger.info(
+            f"Store white list loaded successfully: {list(_STORE_WHITE_LIST_MAP.keys())}"
+        )
+
+    except ImportError as error:
+        logger.error(f"Failed to import required models for white list: {error}")
+        raise
+    except Exception as error:
+        logger.error(f"Unexpected error loading store white list: {error}")
+        raise
 
 
 def _is_store_dir(dir_path: Path) -> bool:
@@ -674,19 +733,24 @@ def _is_store_dir(dir_path: Path) -> bool:
     Raises:
         `ValueError`: If `dir_path` is not a `Path` instance.
     """
+    logger = _get_logger()
+    logger.debug(f"Checking if directory is valid store: {dir_path}")
 
-    # Inpute type validation
+    # Input type validation
     if not isinstance(dir_path, Path):
+        logger.error(f"Invalid dir_path type: {type(dir_path)}")
         raise _expected_got_var_value_error(
             var_name="dir_path", got=type(dir_path), expected=Path
         )
 
     # If not in white-list -> False
     if dir_path.name not in _STORE_WHITE_LIST_MAP:
+        logger.debug(f"Directory {dir_path.name} not in whitelist")
         return False
 
     # If directory doesn't exist or not a directory -> False
     if not dir_path.exists() or not dir_path.is_dir():
+        logger.debug(f"Directory {dir_path} does not exist or is not a directory")
         return False
 
     # Directory contents
@@ -694,59 +758,85 @@ def _is_store_dir(dir_path: Path) -> bool:
 
     # If empty directory -> False
     if len(dir_contents) == 0:
+        logger.debug(f"Directory {dir_path} is empty")
         return False
 
     # If no index file -> False
     if not any(item.name == "index" for item in dir_contents):
+        logger.debug(f"Directory {dir_path} does not contain index file")
         return False
 
     # Assume true
+    logger.debug(f"Directory {dir_path} is a valid store directory")
     return True
 
 
 def _setup_store_map():
+    logger = _get_logger()
+    logger.debug("Setting up store map")
+
     global _STORE_MAP
 
     # Issue with missing path
     if not _PATH_SETUP_DONE or _STORES_DIR is None:
+        logger.error(
+            "Cannot setup store map: paths not setup or stores directory not set"
+        )
         raise RuntimeError("Either pathing is not setup or stores directory is not set")
 
     # Only setup once
     if len(_STORE_MAP) != 0:
+        logger.debug(f"Store map already setup with {len(_STORE_MAP)} stores")
         return
+
+    logger.debug(f"Scanning stores directory: {_STORES_DIR}")
 
     # Get list of stores
     for store_path in _STORES_DIR.iterdir():
+        logger.debug(f"Processing store path: {store_path}")
+
         # Is it a store directory -> setup
         if _is_store_dir(store_path):
             # Get model type, name and then store
             model_name = store_path.name
             model_type = _STORE_WHITE_LIST_MAP[model_name]
+            logger.debug(f"Setting up store for model type: {model_name}")
+
             model_store = ModelFileStore[model_type](
                 root_dir=store_path, model_type=model_type
             )
 
             # Add model store to map
             _STORE_MAP[model_store.name] = model_store
+            logger.info(f"Successfully loaded existing store for {model_name}")
 
         # If not a store, remove
         # Is directory -> delete contents and remove
         elif store_path.is_dir():
+            logger.warning(f"Removing invalid store directory: {store_path}")
             shutil.rmtree(store_path)
             store_path.rmdir()
 
         # Is file -> delete
         else:
+            logger.warning(f"Removing invalid store file: {store_path}")
             store_path.unlink()
 
     # Ensure all white-listed model types have a store
+    logger.debug("Ensuring all whitelisted model types have stores")
     for model_name, model_type in _STORE_WHITE_LIST_MAP.items():
         if model_name not in _STORE_MAP:
+            logger.debug(f"Creating new store for model type: {model_name}")
             store_path = _STORES_DIR / model_name
             model_store = ModelFileStore[model_type](
                 root_dir=store_path, model_type=model_type
             )
             _STORE_MAP[model_store.name] = model_store
+            logger.info(f"Successfully created new store for {model_name}")
+
+    logger.info(
+        f"Store map setup completed with {len(_STORE_MAP)} stores: {list(_STORE_MAP.keys())}"
+    )
 
 
 def setup_store():
@@ -757,18 +847,26 @@ def setup_store():
     Raises:
         RuntimeError: If paths have not been initialized via setup_paths().
     """
+    logger = _get_logger()
+    logger.debug("Starting store setup")
+
     # Check if paths are initialized
     if _ASTRO_DIR is None:
+        logger.error("Store setup failed: paths not initialized")
         raise RuntimeError(
             "Paths not initialized. Call setup_paths() before setup_store()."
         )
 
     # Load white list
+    logger.debug("Loading store white list")
     _load_store_white_list()
 
     # Load store map
     # CAUTION - B - Deletes non-white listed model stores
+    logger.debug("Setting up store map")
     _setup_store_map()
+
+    logger.info(f"Store setup completed. Available stores: {list(_STORE_MAP.keys())}")
 
 
 def get_model_file_store(model_type: type[TraceableModel]) -> ModelFileStore:
@@ -787,35 +885,52 @@ def get_model_file_store(model_type: type[TraceableModel]) -> ModelFileStore:
     Raises:
         `ValueError`: If `model_type` is not a subclass of `TraceableModel`.
     """
+    logger = _get_logger()
+    logger.debug(
+        f"Getting model file store for type: {model_type.__name__ if hasattr(model_type, '__name__') else model_type}"
+    )
+
     # Input type validation
     if not isinstance(model_type, type) or not issubclass(model_type, TraceableModel):
+        logger.error(f"Invalid model type: {model_type}")
         raise _expected_got_var_value_error(
             var_name="model_type", got=model_type, expected=type[TraceableModel]
         )
+
     # Extract name
     model_name = model_type.__name__
+    logger.debug(f"Looking for store for model: {model_name}")
 
     # Entry not found in store map
     # B - Might be redundant double check
     if model_name not in _STORE_WHITE_LIST_MAP or model_name not in _STORE_MAP:
+        logger.error(f"Model {model_name} not found in whitelist or store map")
         raise _no_entry_key_error(key_value=model_name)
 
-    # Return correspondoning model file store
+    # Return corresponding model file store
+    logger.debug(f"Successfully retrieved store for model: {model_name}")
     return _STORE_MAP[model_name]
 
 
 def save_model_file_to_store(model_file: TraceableModel):
+    logger = _get_logger()
+    logger.debug(
+        f"Attempting to save model {model_file.uid} of type {type(model_file).__name__}"
+    )
+
     # Extract input type
     model_type = type(model_file)
 
     # Input type validation
     if not isinstance(model_file, TraceableModel):
+        logger.error(f"Invalid model type for storage: {model_type}")
         raise _expected_got_var_value_error(
             var_name="model_type", got=model_type, expected=TraceableModel
         )
 
     # Not a valid model file to store
     if model_type.__name__ not in _STORE_WHITE_LIST_MAP:
+        logger.error(f"Model type {model_type.__name__} not in whitelist")
         raise _no_entry_key_error(key_value=model_type.__name__)
 
     try:
@@ -824,17 +939,25 @@ def save_model_file_to_store(model_file: TraceableModel):
 
         # Add new model to store
         model_store.add_model(model_file)
+        logger.info(
+            f"Successfully saved model {model_file.uid} to {model_type.__name__} store"
+        )
 
     # Error occurred while trying to load file store and save model
     except Exception as error:
+        logger.error(f"Failed to save model {model_file.uid}: {error}")
         raise RuntimeError(
             f"Error occurred while saving model {model_file.uid} to store for `{model_type.__name__}` type"
         ) from error
 
 
 def load_model_file_from_store(key: str) -> TraceableModel:
+    logger = _get_logger()
+    logger.debug(f"Attempting to load model with key: {key}")
+
     # Input type validation
     if not isinstance(key, str):
+        logger.error(f"Invalid key type: {type(key)}")
         raise _expected_key_str_value_error(got=type(key))
 
     # Check stores for entry
@@ -846,21 +969,30 @@ def load_model_file_from_store(key: str) -> TraceableModel:
 
     # No matches
     if len(matches) == 0:
+        logger.warning(f"Model with key {key} not found in any store")
         raise _no_entry_key_error(key_value=key)
 
     # Contains duplicates -> UID matching problem
     if len(matches) > 1:
         matches_str = _options_to_str([store.name for store in matches])
+        logger.error(f"Duplicate UID {key} found in stores: {matches_str}")
         raise ValueError(
             f"Duplicate UID `{key}` found in multiple stores: {matches_str}"
         )
 
     # Get store
     model_store = matches[0]
+    logger.debug(f"Found model {key} in store: {model_store.name}")
+
     try:
         # Return model from model store
-        return model_store.get_model(key)
+        model = model_store.get_model(key)
+        logger.info(f"Successfully loaded model {key} from {model_store.name} store")
+        return model
     except Exception as error:
+        logger.error(
+            f"Failed to load model {key} from store {model_store.name}: {error}"
+        )
         raise RuntimeError(
             f"Error occurred while loading model {key} from store `{model_store.name}`"
         ) from error
@@ -877,13 +1009,19 @@ def remove_model_file_from_store(*keys: str):
         KeyError: If any key is not found in any store.
         RuntimeError: If an error occurs while removing models from stores.
     """
+    logger = _get_logger()
+    logger.debug(f"Attempting to remove models with keys: {keys}")
+
     # Input type validation for all keys
     for key in keys:
         if not isinstance(key, str):
+            logger.error(f"Invalid key type: {type(key)} for key: {key}")
             raise _expected_key_str_value_error(got=type(key))
 
     # Process each key
     for key in keys:
+        logger.debug(f"Processing removal of key: {key}")
+
         # Check stores for entry
         matches: list[ModelFileStore] = []
         for store in _STORE_MAP.values():
@@ -893,11 +1031,13 @@ def remove_model_file_from_store(*keys: str):
 
         # No matches
         if len(matches) == 0:
+            logger.warning(f"Model with key {key} not found for removal")
             raise _no_entry_key_error(key_value=key)
 
         # Contains duplicates -> UID matching problem
         if len(matches) > 1:
             matches_str = _options_to_str([store.name for store in matches])
+            logger.error(f"Duplicate UID {key} found in stores: {matches_str}")
             raise ValueError(
                 f"Duplicate UID `{key}` found in multiple stores: {matches_str}"
             )
@@ -906,7 +1046,13 @@ def remove_model_file_from_store(*keys: str):
         model_store = matches[0]
         try:
             model_store.remove_model(key)
+            logger.info(
+                f"Successfully removed model {key} from {model_store.name} store"
+            )
         except Exception as error:
+            logger.error(
+                f"Failed to remove model {key} from store {model_store.name}: {error}"
+            )
             raise RuntimeError(
                 f"Error occurred while removing model {key} from store `{model_store.name}`"
             ) from error
@@ -923,11 +1069,16 @@ def clear_model_file_store(*model_types: type[TraceableModel]):
         KeyError: If any model_type is not found in the store whitelist.
         RuntimeError: If an error occurs while clearing stores.
     """
+    logger = _get_logger()
+    model_names = [model_type.__name__ for model_type in model_types]
+    logger.debug(f"Attempting to clear stores for model types: {model_names}")
+
     # Input type validation for all model types
     for model_type in model_types:
         if not isinstance(model_type, type) or not issubclass(
             model_type, TraceableModel
         ):
+            logger.error(f"Invalid model type: {model_type}")
             raise _expected_got_var_value_error(
                 var_name="model_type", got=model_type, expected=type[TraceableModel]
             )
@@ -936,16 +1087,23 @@ def clear_model_file_store(*model_types: type[TraceableModel]):
     for model_type in model_types:
         # Extract name
         model_name = model_type.__name__
+        logger.debug(f"Processing clear for model type: {model_name}")
 
         # Entry not found in store map
         if model_name not in _STORE_WHITE_LIST_MAP or model_name not in _STORE_MAP:
+            logger.error(f"Model type {model_name} not found in store whitelist or map")
             raise _no_entry_key_error(key_value=model_name)
 
         # Get the store and clear it
         try:
             model_store = _STORE_MAP[model_name]
+            items_count = len(model_store)
             model_store.clear()
+            logger.info(
+                f"Successfully cleared {items_count} items from {model_name} store"
+            )
         except Exception as error:
+            logger.error(f"Failed to clear store for {model_name}: {error}")
             raise RuntimeError(
                 f"Error occurred while clearing store for `{model_name}` type"
             ) from error
