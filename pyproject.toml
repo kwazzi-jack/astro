@@ -28,21 +28,75 @@
         "python-dotenv>=1.0.1",
         "pyyaml>=6.0.2",
         "rich>=13.9.4",
+        "streamlit>=1.49.0",
         "textual>=3.2.0",
 ]
 
-    [project.scripts]
-        astro-start = "astro:main"
-        astro-logs  = "astro.logging.viewer:view_logs"
 
 [build-system]
     requires      = ["hatchling"]
     build-backend = "hatchling.build"
 
 [dependency-groups]
-    dev = ["pytest>=8.3.5", "pytest-cov>=6.0.0"]
-scripts = [
+dev = [
+    "pytest>=8.3.5",
+    "pytest-cov>=6.0.0",
     "mdformat>=0.7.22",
     "mdformat-gfm>=0.4.1",
     "mdformat-tables>=1.0.0",
+    "pytest-ruff>=0.5",
+    "pytest-black>=0.6.0",
+    "pytest-mypy>=1.0.1",
 ]
+
+[project.scripts]
+astro-start = "astro.app.base:astro_start"
+astro-logs = "astro.logging.viewer:view_logs"
+
+# Development/Testing scripts (only work when dev dependencies installed)
+test = "scripts.test_runner:test_all"
+test-cov = "scripts.test_runner:test_with_coverage"
+test-unit = "scripts.test_runner:test_unit"
+test-filesystem = "scripts.test_runner:test_filesystem"
+test-integration = "scripts.test_runner:test_integration"
+test-fast = "scripts.test_runner:test_fast"
+test-slow = "scripts.test_runner:test_slow"
+test-watch = "scripts.test_runner:test_watch"
+test-debug = "scripts.test_runner:test_debug"
+test-failed = "scripts.test_runner:test_failed"
+
+# Code Quality scripts
+test-ruff = "scripts.test_runner:test_ruff"
+test-black = "scripts.test_runner:test_black"
+test-mypy = "scripts.test_runner:test_mypy"
+test-quality = "scripts.test_runner:test_quality"
+test-full = "scripts.test_runner:test_all_with_quality"
+
+# Tool configurations
+[tool.ruff]
+line-length = 88
+target-version = "py312"
+
+[tool.ruff.lint]
+select = [
+    "E",  # pycodestyle errors
+    "W",  # pycodestyle warnings
+    "F",  # pyflakes
+    "I",  # isort
+]
+ignore = [
+    "E501",  # line too long, handled by black
+]
+
+[tool.black]
+line-length = 88
+target-version = ["py312"]
+
+[tool.mypy]
+python_version = "3.12"
+warn_return_any = true
+warn_unused_configs = true
+disallow_untyped_defs = false
+disallow_incomplete_defs = false
+check_untyped_defs = true
+ignore_missing_imports = true

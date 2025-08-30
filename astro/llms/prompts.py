@@ -75,7 +75,7 @@ def get_chat_welcome_prompt(context: ChatContext | None = None) -> BaseMessage:
     prompt_text = get_prompt_template(filetag="chat-welcome")
 
     return AIMessagePromptTemplate.from_template(prompt_text).format(
-        current_period=context.current_period
+        current_period=context.current_period()
     )
 
 

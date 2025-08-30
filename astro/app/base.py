@@ -2,63 +2,171 @@ import sys
 from typing import Literal
 
 import click
-from pydantic import ValidationError
 import streamlit as st
-from streamlit.web import cli as stcli
+from pydantic import ValidationError
 from streamlit import runtime
+from streamlit.web import cli as stcli
 
-from astro.logging.base import LogLevel, get_logger
-from astro.paths import get_module_dir
+from astro.agents.chat import AstroChatAgent
 from astro.app.config import DisplayTheme, StreamlitConfig
+from astro.llms.base import ModelName, ModelProvider
+from astro.loggings.base import LogLevel, get_logger
+from astro.paths import get_module_dir
 
 # Load logger
 _logger = get_logger(__file__)
+
 
 def run_streamlit_app():
     # Setup configuration for page
     st.set_page_config(
         page_title="Astro",
-        page_icon="🌌",  # TODO: Change to something more interesting
+        page_icon="🌌",
         layout="wide",
+        initial_sidebar_state="expanded",
     )
-    st.title("Astro 🌌")
 
     # Custom CSS for styling
-    st.markdown(
-        """
-        <style>
-        .main {
-            background-color: #0f2027;
-            color: #fff;
-        }
-        .stButton>button {
-            background-color: #1a2980;
-            color: #fff;
-        }
-        </style>
-        """,
-        unsafe_allow_html=True,
-    )
+    try:
+        css_path = get_module_dir(__file__) / "streamlit.css"
+        with open(css_path) as file:
+            css = file.read()
+        st.markdown(f"<style>{css}</style>", unsafe_allow_html=True)
+    except FileNotFoundError:
+        st.warning("streamlit.css not found. App will use default styling.")
 
-    st.header("Welcome to Astro Demo Interface 🚀")
-    st.subheader("This is a dummy Streamlit interface for testing.")
+    st.title("Astro")
 
-    # Sidebar
+    # Initialize session state for agent and manager
+    if "chat_agent" not in st.session_state:
+        st.session_state.chat_agent = None
+    if "conversation_manager" not in st.session_state:
+        st.session_state.conversation_manager = ConversationManager()
+
+    manager = st.session_state.conversation_manager
+
+    # Sidebar for model and conversation configuration
     with st.sidebar:
-        st.header("Sidebar")
-        st.write("This is the sidebar content.")
-        st.button("Dummy Button")
+        st.header("Configuration")
 
-    # Main area
-    st.write("Here is some main content.")
-    st.success("Streamlit app loaded successfully!")
+        # Provider selection
+        provider_options = [provider.value for provider in ModelProvider]
+        selected_provider = st.selectbox(
+            "Select Provider:",
+            provider_options,
+            index=provider_options.index(st.session_state.current_provider),  # pyright: ignore[reportArgumentType]
+        )
+        model_provider = ModelProvider(selected_provider)
+        model_options = model_provider.models
 
-    # Example input/output
-    user_input = st.text_input("Type something:")
-    if user_input:
-        st.info(f"You typed: {user_input}")
+        selected_model = st.selectbox("Select Model:", model_options)
 
-    st.line_chart({"data": [1, 5, 2, 6, 2, 1]})
+        # Initialize or update chat agent if provider changed
+        if (
+            st.session_state.current_provider != selected_provider
+            or st.session_state.chat_agent is None
+        ):
+            try:
+                st.session_state.chat_agent = AstroChatAgent(
+                    identifier=selected_model, provider=selected_provider
+                )
+                st.session_state.current_provider = selected_provider
+                st.success(f"Initialized {selected_provider} with {selected_model}")
+            except Exception as e:
+                st.error(f"Failed to initialize model: {e}")
+                st.session_state.chat_agent = None
+
+        st.header("Conversations")
+
+        # New Chat button
+        if st.button("New Chat", use_container_width=True, type="primary"):
+            st.session_state.conversation_counter += 1
+            new_id = str(st.session_state.conversation_counter)
+            st.session_state.conversations.append(
+                {"id": new_id, "name": f"Chat {new_id}", "messages": []}
+            )
+            st.session_state.current_conversation_id = new_id
+            st.rerun()
+
+        # Conversations list
+        for conv in st.session_state.conversations:
+            is_active = conv["id"] == st.session_state.current_conversation_id
+            col1, col2 = st.columns([5, 1])
+
+            with col1:
+                display_name = f"{conv['name']}"
+                if st.button(
+                    display_name,
+                    key=f"conv_{conv['id']}",
+                    use_container_width=True,
+                    type="primary" if is_active else "secondary",
+                ):
+                    if not is_active:
+                        st.session_state.current_conversation_id = conv["id"]
+                        st.rerun()
+
+            with col2:
+                if st.button(
+                    "🗑️",
+                    key=f"delete_{conv['id']}",
+                    help="Delete conversation",
+                    use_container_width=True,
+                ):
+                    if len(st.session_state.conversations) > 1:
+                        st.session_state.conversations = [
+                            c
+                            for c in st.session_state.conversations
+                            if c["id"] != conv["id"]
+                        ]
+                        if is_active:
+                            st.session_state.current_conversation_id = (
+                                st.session_state.conversations[0]["id"]
+                            )
+                        st.rerun()
+                    else:
+                        st.warning("Cannot delete the only conversation.")
+
+        # Clear chat button
+        if st.button("Clear Current Chat", use_container_width=True):
+            messages = get_current_conversation_messages()
+            messages.clear()
+            st.rerun()
+
+    # Main chat interface
+    if st.session_state.chat_agent is None:
+        st.warning("Please configure a model in the sidebar to start chatting.")
+        return
+
+    messages = get_current_conversation_messages()
+
+    # Display chat messages
+    for message in messages:
+        avatar = "🌌" if message["role"] == "assistant" else "👤"
+        with st.chat_message(message["role"], avatar=avatar):
+            st.write(message["content"])
+
+    # Chat input
+    if prompt := st.chat_input("Ask Astro anything..."):
+        # Add user message to chat history
+        messages.append({"role": "user", "content": prompt})
+
+        # Display user message
+        with st.chat_message("user", avatar="👤"):
+            st.write(prompt)
+
+        # Generate assistant response
+        with st.chat_message("assistant", avatar="🌌"):
+            with st.spinner("Thinking..."):
+                try:
+                    response = st.session_state.chat_agent.act(prompt)
+                    st.write(response)
+
+                    # Add assistant response to chat history
+                    messages.append({"role": "assistant", "content": response})
+                except Exception as e:
+                    st.error(f"Error generating response: {e}")
+                    _logger.error(f"Chat agent error: {e}", exc_info=True)
+        st.rerun()
 
 
 @click.command()
@@ -109,13 +217,13 @@ def run_streamlit_app():
     show_default=True,
     help="Automatically rerun the app when source code is saved",
 )
-def astro_run_command(
+def astro_start(
     port: int,
     host: str,
     no_browser: bool,
     log_level: Literal["DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"],
     debug_mode: bool,
-    theme: Literal["light", "dark", "system"],
+    theme: str,
     run_on_save: bool,
 ):
     """Run the Astro Streamlit application."""
@@ -141,6 +249,8 @@ def astro_run_command(
                 run_on_save=run_on_save,
             )
         except ValueError as error:
+            _logger.error(f"Configuration validation error: {error}")
+            raise
 
         sys.argv = [
             "streamlit",
@@ -151,7 +261,7 @@ def astro_run_command(
             "--server.address",
             host,
             "--server.headless",
-            "true",
+            "true" if no_browser else "false",
             "--server.runOnSave",
             str(run_on_save).lower(),
             "--logger.level",
@@ -167,7 +277,7 @@ def astro_run_command(
 
 
 if __name__ == "__main__":
-    pass
+    astro_start()
 
 # @st.dialog(title="Error", width="small")
 # def error_popup(message: str):

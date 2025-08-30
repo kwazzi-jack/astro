@@ -1,23 +1,22 @@
 # astro/logger.py
 
+import datetime
 import enum
-import logging
-from logging.handlers import TimedRotatingFileHandler
 import json
+import logging
 import os
-from pathlib import Path
 import platform
 import socket
 import traceback
-import datetime
+from logging.handlers import TimedRotatingFileHandler
+from pathlib import Path
 from typing import Literal, Self, TypeAlias
 
+from rich.console import Console
 from rich.logging import RichHandler
 from rich.theme import Theme
-from rich.console import Console
 
-
-from astro.paths import LOG_DIR, StrPath
+from astro.paths import _LOG_DIR, StrPath
 
 
 # --- Types/Aliases ---
@@ -29,7 +28,7 @@ class LogLevel(enum.IntEnum):
     DEBUG = logging.DEBUG
 
     @classmethod
-    def from_str(cls, value: str) -> Self:
+    def from_str(cls, value: str) -> "LogLevel":
         match value.upper():
             case "CRITICAL":
                 return LogLevel.CRITICAL
@@ -47,7 +46,7 @@ class LogLevel(enum.IntEnum):
 
 # --- Configuration ---
 _BASE_LOG_LEVEL = logging.INFO
-_LOG_FILE = LOG_DIR / "astro.jsonl"  # JSONL file for structured logs
+_LOG_FILE = _LOG_DIR / "astro.jsonl"  # JSONL file for structured logs
 
 # Internal flag to ensure setup runs only once
 _setup_done = False
@@ -233,7 +232,7 @@ setup_logging()
 if __name__ == "__main__":
     from pathlib import Path
 
-    print(LOG_DIR)
+    print(_LOG_DIR)
     main_logger = get_logger(__file__)
     util_logger = get_logger(Path(__file__).parent / "util.py")
 

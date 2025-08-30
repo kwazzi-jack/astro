@@ -25,7 +25,7 @@ from textual.widgets import (
 )
 
 from astro.paths import get_module_dir
-from astro.logging.base import _LOG_FILE
+from astro.loggings.base import _LOG_FILE
 
 # CSS path for Textual
 _TEXTUAL_CSS_PATH = get_module_dir(__file__) / "textual.css"

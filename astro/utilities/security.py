@@ -4,8 +4,8 @@ from pathlib import Path
 from dotenv import dotenv_values
 from pydantic import SecretStr
 
-from astro.logging.base import get_logger
-from astro.paths import ASTRO_DIR, BASE_ENV_PATH
+from astro.loggings.base import get_logger
+from astro.paths import _BASE_SECRETS_PATH, ASTRO_DIR
 
 logger = get_logger("astro.utilities.security")
 
@@ -44,14 +44,14 @@ def files_differ(file1: str | Path, file2: str | Path, chunk_size: int = -1) -> 
 
 
 def get_secret_key(key: str) -> SecretStr | None:
-    if not BASE_ENV_PATH.exists():
+    if not _BASE_SECRETS_PATH.exists():
         error_msg = (
             "Cannot find environment file at `~/.astro`. "
             "#TODO - B - Add functionality to add keys dynamically"
         )
         raise ValueError(error_msg)
 
-    env_dict = dotenv_values(BASE_ENV_PATH)
+    env_dict = dotenv_values(_BASE_SECRETS_PATH)
     if len(env_dict) == 0 or key not in env_dict:
         raise ValueError(f"Environment file empty or missing key `{key}`")
 

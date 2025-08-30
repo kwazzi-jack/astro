@@ -24,6 +24,7 @@ Dependencies:
 """
 
 from enum import StrEnum
+from pathlib import Path
 from typing import Any, TypeAlias, overload
 
 from langchain_anthropic.chat_models import ChatAnthropic
@@ -32,13 +33,17 @@ from langchain_ollama import ChatOllama
 from langchain_openai.chat_models import ChatOpenAI
 from pydantic import (
     BaseModel,
+    Field,
     SecretStr,
+    computed_field,
 )
 
 from astro.llms.contexts import ChatContext
 from astro.llms.prompts import get_chat_system_prompt, get_chat_welcome_prompt
+from astro.typings import TraceableModel
 from astro.utilities.security import get_secret_key
 from astro.utilities.timing import get_datetime_now
+from astro.utilities.uids import named_uid_factory
 
 ChatModel: TypeAlias = ChatAnthropic | ChatOllama | ChatOpenAI
 
@@ -105,6 +110,10 @@ class ModelProvider(StrEnum):
     ANTHROPIC = "anthropic"
     OLLAMA = "ollama"
 
+    @property
+    def default(self) -> "ModelProvider":
+        return ModelProvider.OLLAMA
+
     @classmethod
     def associated_with(cls, model_name: str) -> "ModelProvider":
         if not ModelName.supports(model_name):
@@ -154,7 +163,7 @@ class ModelProvider(StrEnum):
         return normalized_value in cls.__members__
 
 
-class LLMConfig(BaseModel):
+class LLMConfig(TraceableModel):
     model_name: str
     provider: ModelProvider
     temperature: float = 0.7
@@ -634,20 +643,4 @@ def create_conversational_model(
 
 
 if __name__ == "__main__":
-    from langchain_core.messages import BaseMessage, HumanMessage
-
-    bot = create_conversational_model("gpt-4o", thinking=False, reasoning=False)
-    print(f"{bot=}")
-    first_think = False
-    first_output = False
-    current_context = ChatContext()
-    system_message = get_chat_system_prompt(current_context)
-    welcome_message = get_chat_welcome_prompt(current_context)
-    user_message = HumanMessage(
-        "How could I create an academically formal matplotlib plot that takes in my fits file of a radio galaxy at MGC_1h22s.fits?"
-    )
-    messages: list[BaseMessage] = [system_message, welcome_message, user_message]
-    response = bot.invoke(messages)
-    messages.append(response)
-    for message in messages:
-        message.pretty_print()
+    ...
