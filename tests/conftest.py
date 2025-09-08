@@ -12,10 +12,10 @@ from typing import Any
 import pytest
 from pydantic import Field
 
-from astro.typings import TraceableModel
+from astro.typings import RecordableModel
 
 
-class MockTraceableModel(TraceableModel):
+class MockTraceableModel(RecordableModel):
     """Mock implementation of TraceableModel for testing."""
 
     name: str = Field(description="Name of the mock model")
@@ -25,7 +25,7 @@ class MockTraceableModel(TraceableModel):
     )
 
 
-class AnotherMockModel(TraceableModel):
+class AnotherMockModel(RecordableModel):
     """Another mock model for testing type validation."""
 
     title: str = Field(description="Title of the model")
@@ -90,7 +90,3 @@ def corrupted_temp_dir(tmp_path: Path) -> Path:
         f.write("invalid json content")
 
     return tmp_path
-
-
-
-

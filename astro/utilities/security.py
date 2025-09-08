@@ -1,11 +1,19 @@
+import json
 import zlib
 from pathlib import Path
+from typing import Any
 
+import blake3
 from dotenv import dotenv_values
 from pydantic import SecretStr
 
+from astro.errors import (
+    _expected_key_str_value_error,
+    _no_entry_key_error,
+)
 from astro.loggings.base import get_logger
-from astro.paths import _ASTRO_DIR, _BASE_SECRETS_PATH
+from astro.paths import _BASE_SECRETS_PATH
+from astro.typings import type_name
 
 logger = get_logger("astro.utilities.security")
 
@@ -39,28 +47,55 @@ def checksum(
 
 def files_differ(file1: str | Path, file2: str | Path, chunk_size: int = -1) -> bool:
     files_equal = checksum(file1, chunk_size) == checksum(file2, chunk_size)
-    # FIXME logger.debug(f"File '{file1.name}' == File '{file2.name}'? {files_equal}")
     return not files_equal
 
 
-def get_secret_key(key: str) -> SecretStr | None:
+def get_secret_key(key: str) -> SecretStr:
+    # Input validation
+    if _BASE_SECRETS_PATH is None:
+        raise FileNotFoundError(
+            "Secrets file has not been set. Ensure one is present at `$ASTRO_HOME`. "
+            "#TODO - Add functionality to add keys dynamically"
+        )
+
+    if not isinstance(key, str):
+        raise _expected_key_str_value_error(got=type(key))
+
     if not _BASE_SECRETS_PATH.exists():
         error_msg = (
-            "Cannot find environment file at `~/.astro`. "
-            "#TODO - B - Add functionality to add keys dynamically"
+            "Secrets file cannot be found. Ensure one is present at `$ASTRO_HOME`. "
+            "#TODO - Add functionality to add keys dynamically"
         )
         raise ValueError(error_msg)
 
-    env_dict = dotenv_values(_BASE_SECRETS_PATH)
-    if len(env_dict) == 0 or key not in env_dict:
-        raise ValueError(f"Environment file empty or missing key `{key}`")
+    secrets_dict = dotenv_values(_BASE_SECRETS_PATH)
+    if len(secrets_dict) == 0:
+        raise ValueError("Secrets file is empty")
 
-    value = env_dict[key]
-    if not isinstance(value, str):
+    if key not in secrets_dict:
+        raise _no_entry_key_error(key_value=key)
+
+    secret_value = secrets_dict[key]
+    if not isinstance(secret_value, str):
         raise ValueError(
-            f"Environment key `{value}` has a non-string value (`{type(value).__class__}`)"
+            f"Secret key `{key}` has a non-string value `{secret_value}` (of type `{type_name(secret_value)}`)"
         )
-    return SecretStr(value)
+    return SecretStr(secret_value)
+
+
+def _compute_stable_hash_from_dict(obj_dict: dict[Any, Any]) -> bytes:
+    # Create deterministic JSON string
+    # Brian If something is wrong with hashing, its probably here
+    json_str = json.dumps(
+        obj_dict,
+        sort_keys=True,  # IMPORTANT: for consistent key order
+        separators=(",", ";"),  # No whitespace
+        ensure_ascii=True,  # Avoid encoding variations
+        default=str,  # Fallback conversion
+    )
+
+    # Generate blake3 hash
+    return blake3.blake3(json_str.encode("utf-8")).digest()
 
 
 if __name__ == "__main__":

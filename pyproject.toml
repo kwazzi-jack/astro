@@ -11,6 +11,7 @@
     dependencies = [
         "anthropic>=0.62.0",
         "appdirs>=1.4.4",
+        "blake3>=1.0.5",
         "click>=8.1.8",
         "distro>=1.9.0",
         "docstring-parser>=0.16",
@@ -28,6 +29,7 @@
         "python-dotenv>=1.0.1",
         "pyyaml>=6.0.2",
         "rich>=13.9.4",
+        "sqlmodel>=0.0.24",
         "streamlit>=1.49.0",
         "textual>=3.2.0",
 ]
@@ -51,7 +53,7 @@ dev = [
 
 [project.scripts]
 astro-start = "astro.app.base:astro_start"
-astro-logs = "astro.logging.viewer:view_logs"
+astro-logs = "astro.loggings.viewer:view_logs"
 
 # Development/Testing scripts (only work when dev dependencies installed)
 test = "scripts.test_runner:test_all"

@@ -2,7 +2,8 @@ import json
 import math
 import shutil
 import textwrap
-from typing import IO, Any, Optional
+from collections.abc import Callable, Sequence
+from typing import IO, Any
 
 from langchain_core.messages import BaseMessage
 from rich import print as rprint
@@ -21,6 +22,25 @@ def md_print(
     flush: bool = False,
 ):
     rprint(Markdown(text), sep=sep, end=end, file=file, flush=flush)
+
+
+
+
+def inline_code_format(line: str) -> str:
+    return f"`{line}`"
+
+
+def inline_list_format(items: list[str]) -> str:
+    if len(items) == 0:
+        return ""
+    elif len(items) == 1:
+        return inline_code_format(items[0])
+    else:
+        return (
+            ", ".join(map(inline_code_format, items[:-1]))
+            + " or "
+            + inline_code_format(items[-1])
+        )
 
 
 def astro_md_print(message: Any):
