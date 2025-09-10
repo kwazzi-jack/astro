@@ -11,22 +11,24 @@ import traceback
 from collections.abc import Sequence
 from logging.handlers import TimedRotatingFileHandler
 from pathlib import Path
-from typing import Any, TypeVar
+from typing import Any
 
 from rich.console import Console
 from rich.logging import RichHandler
+from rich.text import Text
 from rich.theme import Theme
 
 from astro.errors import (
+    AstroError,
     AstroErrorType,
-    BaseError,
+    ExpectedElementTypeError,
     ExpectedTypeError,
     ExpectedVarType,
     KeyStrError,
     KeyTypeError,
     LoadError,
-    ModelStoreError,
-    NoEntryKeyError,
+    ModelFileStoreError,
+    NoEntryError,
     PythonErrorType,
     RecordableIdentityError,
     SaveError,
@@ -41,6 +43,9 @@ from astro.typings import (
     StrPath,
     type_name,
 )
+
+# --- GLOBALS ---
+_LOGGY_TAG_ATTR = "_from_loggy"
 
 
 class LogLevel(enum.IntEnum):
@@ -192,8 +197,8 @@ class JsonFormatter(logging.Formatter):
         return datetime.datetime.fromtimestamp(created, tz=_LOCAL_TZ).isoformat()
 
 
-def dt_formatter(dt: datetime.datetime) -> str:
-    return dt.isoformat(sep=" ", timespec="milliseconds")
+def dt_formatter(dt: datetime.datetime) -> Text:
+    return Text(dt.isoformat(sep=" ", timespec="milliseconds"))
 
 
 def _get_module_logger(filepath: StrPath) -> logging.Logger:
@@ -225,6 +230,9 @@ class Loggy:
         `_logger` (`logging.Logger`): The underlying logger instance.
     """
 
+    # Lazy references
+    from astro.paths import ModelFileStore
+
     def __init__(self, module_path: StrPath) -> None:
         """Initializes the Loggy instance.
 
@@ -247,7 +255,7 @@ class Loggy:
             `message` (`str`): The message to be logged.
             `execution_info` (`bool`, optional): If `True`, exception info is added to the log. Defaults to `False`.
             `stack_info` (`bool`, optional): If `True`, stack info is added to the log. Defaults to `False`.
-            `extra` (`NamedDict | None`, optional): Additional context to include in the log. Defaults to `None`.
+            `extra` (`Any`, optional): Additional context to include in the log. Defaults to `None`.
         """
         self._logger.info(
             message, exc_info=execution_info, stack_info=stack_info, extra=extra
@@ -266,7 +274,7 @@ class Loggy:
             `message` (`str`): The message to be logged.
             `execution_info` (`bool`, optional): If `True`, exception info is added to the log. Defaults to `False`.
             `stack_info` (`bool`, optional): If `True`, stack info is added to the log. Defaults to `False`.
-            `extra` (`NamedDict | None`, optional): Additional context to include in the log. Defaults to `None`.
+            `extra` (`Any`, optional): Additional context to include in the log. Defaults to `None`.
         """
         self._logger.debug(
             message, exc_info=execution_info, stack_info=stack_info, extra=extra
@@ -285,7 +293,7 @@ class Loggy:
             `message` (`str`): The message to be logged.
             `execution_info` (`bool`, optional): If `True`, exception info is added to the log. Defaults to `False`.
             `stack_info` (`bool`, optional): If `True`, stack info is added to the log. Defaults to `False`.
-            `extra` (`NamedDict | None`, optional): Additional context to include in the log. Defaults to `None`.
+            `extra` (`Any`, optional): Additional context to include in the log. Defaults to `None`.
         """
         self._logger.warning(
             message, exc_info=execution_info, stack_info=stack_info, extra=extra
@@ -304,7 +312,7 @@ class Loggy:
             `message` (`str`): The message to be logged.
             `execution_info` (`bool`, optional): If `True`, exception info is added to the log. Defaults to `False`.
             `stack_info` (`bool`, optional): If `True`, stack info is added to the log. Defaults to `False`.
-            `extra` (`NamedDict | None`, optional): Additional context to include in the log. Defaults to `None`.
+            `extra` (`Any`, optional): Additional context to include in the log. Defaults to `None`.
         """
         self._logger.error(
             message, exc_info=execution_info, stack_info=stack_info, extra=extra
@@ -323,7 +331,7 @@ class Loggy:
             `message` (`str`): The message to be logged.
             `execution_info` (`bool`, optional): If `True`, exception info is added to the log. Defaults to `False`.
             `stack_info` (`bool`, optional): If `True`, stack info is added to the log. Defaults to `False`.
-            `extra` (`NamedDict | None`, optional): Additional context to include in the log. Defaults to `None`.
+            `extra` (`Any`, optional): Additional context to include in the log. Defaults to `None`.
         """
         self._logger.critical(
             message, exc_info=execution_info, stack_info=stack_info, extra=extra
@@ -344,183 +352,419 @@ class Loggy:
             `msg_or_obj` (`str | Any`): The message or object to be logged.
             `execution_info` (`bool`, optional): If `True`, exception info is added to the log. Defaults to `True`.
             `stack_info` (`bool`, optional): If `True`, stack info is added to the log. Defaults to `False`.
-            `extra` (`NamedDict | None`, optional): Additional context to include in the log. Defaults to `None`.
+            `extra` (`Any`, optional): Additional context to include in the log. Defaults to `None`.
         """
         self._logger.exception(
             msg_or_obj, exc_info=execution_info, stack_info=stack_info, extra=extra
         )
 
+    def _log_builtin_exception(self, error: Exception):
+        """Log a built-in exception with appropriate error handling.
+
+        Attempts to log the exception with full exception info if currently in an
+        exception handler context. Falls back to a simple error log if exception
+        logging fails.
+
+        Args:
+            `error` (`Exception`): The built-in exception to log.
+        """
+        message = f"{type_name(error)}: {error}"
+        try:
+            # Try log exception if in exception handler
+            self.exception(message, execution_info=True, extra={})
+        except Exception:
+            # Fallback to error log
+            self.error(message, extra={})
+
     def _log_and_return_builtin_error(
         self,
         *,
         error: PythonErrorType,
-        message: str,
+        extra: NamedDict | None = None,
+        caused_by: AstroError | Exception | None = None,
         skip_error_log: bool = False,
-        **kwargs: Any,
     ) -> PythonErrorType:
-        """Logs and returns a built-in exception."""
-        if not skip_error_log:
-            self._logger.error(message, extra=kwargs)
+        """Logs a built-in error's details and returns the error instance.
+
+        Args:
+            `error` (`PythonErrorType`): The built-in error to log and return.
+            `extra` (`NamedDict | None`, optional): Additional details to include in the log for built-in errors. Defaults to `None`.
+            `caused_by` (`AstroError | Exception | None`, optional): The error to wrap. Defaults to `None`.
+            `skip_error_log` (`bool`, optional): If `True`, logging is skipped. Defaults to `False`.
+
+        Returns:
+            `PythonErrorType`: The created error instance.
+
+        Notes:
+            If `caused_by` is provided and of type `AstroError` or tagged by `Loggy`, it will not be logged again.
+        """
+        # Skip logging if specified
+        if skip_error_log:
+            return error
+
+        # Check if the error is already tagged as from Loggy
+        is_loggy_error = getattr(error, _LOGGY_TAG_ATTR, False)
+
+        # Wrapping another exception (Ignore if already a BaseError or tagged)
+        if (
+            caused_by is not None
+            and not is_loggy_error
+            and isinstance(caused_by, Exception)
+        ):
+            self._log_builtin_exception(caused_by)
+
+        # Log Python error
+        self.error(message=f"{type_name(error)}: {error}", extra=extra or {})
+
+        # Tag the error as coming from Loggy
+        setattr(error, _LOGGY_TAG_ATTR, True)
+
+        # Return the original error
         return error
 
-    def _log_and_return_error(
+    def _log_and_return_astro_error(
         self,
         *,
         error: AstroErrorType,
-        from_error: AstroErrorType | Exception | None = None,
+        caused_by: AstroError | Exception | None = None,
         skip_error_log: bool = False,
     ) -> AstroErrorType:
-        """Logs the error's details and returns the error instance."""
+        """Logs the error's details and returns the error instance.
 
-        # Wrapping another exception (Ignore if already a BaseError)
+        Args:
+            `error` (`AstroErrorType`): The astro error to log and return.
+            `caused_by` (`AstroError | Exception | None`, optional): The error to wrap. Defaults to `None`.
+            `skip_error_log` (`bool`, optional): If `True`, logging is skipped. Defaults to `False`.
+
+        Returns:
+            `AstroErrorType`: The created error instance.
+
+        Notes:
+            If `caused_by` is provided and of type `AstroError` or tagged by `Loggy`, it will not be logged again.
+        """
+        # Skip logging if specified
+        if skip_error_log:
+            return error
+
+        # Check if the error is already tagged as from Loggy
+        is_loggy_error = getattr(error, _LOGGY_TAG_ATTR, False)
+
+        # Wrapping another exception (Ignore if already a BaseError or tagged)
         if (
-            skip_error_log
-            and from_error is not None
-            and not isinstance(from_error, BaseError)
+            caused_by is not None
+            and not is_loggy_error
+            and isinstance(caused_by, Exception)
         ):
-            message = f"FROM {type_name(from_error)}: {from_error}"
-            extra = {}
-            try:
-                # Try log exception if in exception handler
-                self.exception(message, execution_info=True, extra=extra)
-            except Exception:
-                # Fallback to error log
-                self.error(message, extra=extra)
+            self._log_builtin_exception(caused_by)
 
-        # To granular error logging control
-        if not skip_error_log:
-            self.error(**error.to_log())
+        # Log error message
+        self.error(**error.to_log())
 
+        # Tag the error as coming from Loggy
+        setattr(error, _LOGGY_TAG_ATTR, True)
+
+        # Return the original error
         return error
 
     # --- Built-in Error Logging Methods ---
     def ValueError(
-        self, message: str, skip_error_log: bool = False, **extra: Any
+        self,
+        message: str,
+        caused_by: AstroError | Exception | None = None,
+        skip_error_log: bool = False,
+        **extra: Any,
     ) -> ValueError:
         """Creates, logs, and returns a `ValueError`.
 
         Args:
-            message (`str`): The error message.
-            **kwargs (`Any`): Additional details to include in the log.
+            `message` (`str`): The error message.
+            `caused_by` (`AstroError | Exception | None`, optional): The original exception that caused this error. Defaults to `None`.
+            `skip_error_log` (`bool`, optional): If `True`, logging is skipped. Defaults to `False`.
+            `**extra` (`Any`, optional): Additional details to include in the log.
 
         Returns:
             `ValueError`: The created error instance.
         """
         return self._log_and_return_builtin_error(
             error=ValueError(message),
-            message=message,
+            caused_by=caused_by,
             skip_error_log=skip_error_log,
             extra=extra,
         )
 
     def TypeError(
-        self, message: str, skip_error_log: bool = False, **extra: Any
+        self,
+        message: str,
+        caused_by: AstroError | Exception | None = None,
+        skip_error_log: bool = False,
+        **extra: Any,
     ) -> TypeError:
         """Creates, logs, and returns a `TypeError`.
 
         Args:
-            message (`str`): The error message.
-            **kwargs (`Any`): Additional details to include in the log.
+            `message` (`str`): The error message.
+            `caused_by` (`AstroError | Exception | None`, optional): The original exception that caused this error. Defaults to `None`.
+            `skip_error_log` (`bool`, optional): If `True`, logging is skipped. Defaults to `False`.
+            `**extra` (`Any`, optional): Additional details to include in the log.
 
         Returns:
             `TypeError`: The created error instance.
         """
         return self._log_and_return_builtin_error(
             error=TypeError(message),
-            message=message,
+            caused_by=caused_by,
             skip_error_log=skip_error_log,
             extra=extra,
         )
 
     def KeyError(
-        self, message: str, skip_error_log: bool = False, **extra: Any
+        self,
+        message: str,
+        caused_by: AstroError | Exception | None = None,
+        skip_error_log: bool = False,
+        **extra: Any,
     ) -> KeyError:
         """Creates, logs, and returns a `KeyError`.
 
         Args:
-            message (`str`): The error message.
-            **kwargs (`Any`): Additional details to include in the log.
+            `message` (`str`): The error message.
+            `caused_by` (`AstroError | Exception | None`, optional): The original exception that caused this error. Defaults to `None`.
+            `skip_error_log` (`bool`, optional): If `True`, logging is skipped. Defaults to `False`.
+            `**extra` (`Any`, optional): Additional details to include in the log.
 
         Returns:
             `KeyError`: The created error instance.
         """
         return self._log_and_return_builtin_error(
             error=KeyError(message),
-            message=message,
+            caused_by=caused_by,
             skip_error_log=skip_error_log,
             extra=extra,
         )
 
     def FileNotFoundError(
-        self, message: str, skip_error_log: bool = False, **extra: Any
+        self,
+        message: str,
+        caused_by: AstroError | Exception | None = None,
+        skip_error_log: bool = False,
+        **extra: Any,
     ) -> FileNotFoundError:
         """Creates, logs, and returns a `FileNotFoundError`.
 
         Args:
-            message (`str`): The error message.
-            **kwargs (`Any`): Additional details to include in the log.
+            `message` (`str`): The error message.
+            `caused_by` (`AstroError | Exception | None`, optional): The original exception that caused this error. Defaults to `None`.
+            `skip_error_log` (`bool`, optional): If `True`, logging is skipped. Defaults to `False`.
+            `**extra` (`Any`, optional): Additional details to include in the log.
 
         Returns:
             `FileNotFoundError`: The created error instance.
         """
         return self._log_and_return_builtin_error(
             error=FileNotFoundError(message),
-            message=message,
+            caused_by=caused_by,
             skip_error_log=skip_error_log,
             extra=extra,
         )
 
     def AttributeError(
-        self, message: str, skip_error_log: bool = False, **extra: Any
+        self,
+        message: str,
+        caused_by: AstroError | Exception | None = None,
+        skip_error_log: bool = False,
+        **extra: Any,
     ) -> AttributeError:
         """Creates, logs, and returns an `AttributeError`.
 
         Args:
-            message (`str`): The error message.
-            **kwargs (`Any`): Additional details to include in the log.
+            `message` (`str`): The error message.
+            `caused_by` (`AstroError | Exception | None`, optional): The original exception that caused this error. Defaults to `None`.
+            `skip_error_log` (`bool`, optional): If `True`, logging is skipped. Defaults to `False`.
+            `**extra` (`Any`, optional): Additional details to include in the log.
 
         Returns:
             `AttributeError`: The created error instance.
         """
         return self._log_and_return_builtin_error(
             error=AttributeError(message),
-            message=message,
+            caused_by=caused_by,
             skip_error_log=skip_error_log,
             extra=extra,
         )
 
     def IndexError(
-        self, message: str, skip_error_log: bool = False, **extra: Any
+        self,
+        message: str,
+        caused_by: AstroError | Exception | None = None,
+        skip_error_log: bool = False,
+        **extra: Any,
     ) -> IndexError:
         """Creates, logs, and returns an `IndexError`.
 
         Args:
-            message (`str`): The error message.
-            **kwargs (`Any`): Additional details to include in the log.
+            `message` (`str`): The error message.
+            `caused_by` (`AstroError | Exception | None`, optional): The original exception that caused this error. Defaults to `None`.
+            `skip_error_log` (`bool`, optional): If `True`, logging is skipped. Defaults to `False`.
+            `**extra` (`Any`, optional): Additional details to include in the log.
 
         Returns:
             `IndexError`: The created error instance.
         """
         return self._log_and_return_builtin_error(
             error=IndexError(message),
-            message=message,
+            caused_by=caused_by,
             skip_error_log=skip_error_log,
             extra=extra,
         )
 
-    # --- Custom Error Logging Methods ---
+    def IOError(
+        self,
+        message: str,
+        caused_by: AstroError | Exception | None = None,
+        skip_error_log: bool = False,
+        **extra: Any,
+    ) -> IOError:
+        """Creates, logs, and returns an `IOError`.
+
+        Args:
+            `message` (`str`): The error message.
+            `caused_by` (`AstroError | Exception | None`, optional): The original exception that caused this error. Defaults to `None`.
+            `skip_error_log` (`bool`, optional): If `True`, logging is skipped. Defaults to `False`.
+            `**extra` (`Any`, optional): Additional details to include in the log.
+
+        Returns:
+            `IOError`: The created error instance.
+        """
+        return self._log_and_return_builtin_error(
+            error=IOError(message),
+            caused_by=caused_by,
+            skip_error_log=skip_error_log,
+            extra=extra,
+        )
+
+    def OSError(
+        self,
+        message: str,
+        caused_by: AstroError | Exception | None = None,
+        skip_error_log: bool = False,
+        **extra: Any,
+    ) -> OSError:
+        """Creates, logs, and returns an `OSError`.
+
+        Args:
+            `message` (`str`): The error message.
+            `caused_by` (`AstroError | Exception | None`, optional): The original exception that caused this error. Defaults to `None`.
+            `skip_error_log` (`bool`, optional): If `True`, logging is skipped. Defaults to `False`.
+            `**extra` (`Any`, optional): Additional details to include in the log.
+
+        Returns:
+            `OSError`: The created error instance.
+        """
+        return self._log_and_return_builtin_error(
+            error=OSError(message),
+            caused_by=caused_by,
+            skip_error_log=skip_error_log,
+            extra=extra,
+        )
+
+    def RuntimeError(
+        self,
+        message: str,
+        caused_by: AstroError | Exception | None = None,
+        skip_error_log: bool = False,
+        **extra: Any,
+    ) -> RuntimeError:
+        """Creates, logs, and returns a `RuntimeError`.
+
+        Args:
+            `message` (`str`): The error message.
+            `caused_by` (`AstroError | Exception | None`, optional): The original exception that caused this error. Defaults to `None`.
+            `skip_error_log` (`bool`, optional): If `True`, logging is skipped. Defaults to `False`.
+            `**extra` (`Any`, optional): Additional details to include in the log.
+
+        Returns:
+            `RuntimeError`: The created error instance.
+        """
+        return self._log_and_return_builtin_error(
+            error=RuntimeError(message),
+            caused_by=caused_by,
+            skip_error_log=skip_error_log,
+            extra=extra,
+        )
+
+    def NotImplementedError(
+        self,
+        message: str,
+        caused_by: AstroError | Exception | None = None,
+        skip_error_log: bool = False,
+        **extra: Any,
+    ) -> NotImplementedError:
+        """Creates, logs, and returns a `NotImplementedError`.
+
+        Args:
+            `message` (`str`): The error message.
+            `caused_by` (`AstroError | Exception | None`, optional): The original exception that caused this error. Defaults to `None`.
+            `skip_error_log` (`bool`, optional): If `True`, logging is skipped. Defaults to `False`.
+            `**extra` (`Any`, optional): Additional details to include in the log.
+
+        Returns:
+            `NotImplementedError`: The created error instance.
+        """
+        return self._log_and_return_builtin_error(
+            error=NotImplementedError(message),
+            caused_by=caused_by,
+            skip_error_log=skip_error_log,
+            extra=extra,
+        )
+
+    def FileExistsError(
+        self,
+        message: str,
+        caused_by: AstroError | Exception | None = None,
+        skip_error_log: bool = False,
+        **extra: Any,
+    ) -> FileExistsError:
+        """Creates, logs, and returns a `FileExistsError`.
+
+        Args:
+            `message` (`str`): The error message.
+            `caused_by` (`AstroError | Exception | None`, optional): The original exception that caused this error. Defaults to `None`.
+            `skip_error_log` (`bool`, optional): If `True`, logging is skipped. Defaults to `False`.
+            `**extra` (`Any`, optional): Additional details to include in the log.
+
+        Returns:
+            `FileExistsError`: The created error instance.
+        """
+        return self._log_and_return_builtin_error(
+            error=FileExistsError(message),
+            caused_by=caused_by,
+            skip_error_log=skip_error_log,
+            extra=extra,
+        )
+
+    # --- Astro Error Logging ---
 
     def SetupError(
         self,
         cause: str,
-        from_error: Exception | None = None,
+        caused_by: AstroError | Exception | None = None,
         skip_error_log: bool = False,
         **extra: Any,
     ) -> SetupError:
-        """Creates, logs, and returns a `SetupError` from an existing exception."""
-        return self._log_and_return_error(
+        """Creates, logs, and returns a `SetupError` from an existing exception.
+
+        Args:
+            `cause` (`str`): The cause of the error.
+            `caused_by` (`AstroError | Exception | None`, optional): The error to wrap. Defaults to `None`.
+            `skip_error_log` (`bool`, optional): If `True`, logging is skipped. Defaults to `False`.
+            `extra` (`Any`, optional): Additional details to include in the log.
+
+        Returns:
+            `SetupError`: The created error instance.
+        """
+        return self._log_and_return_astro_error(
             error=SetupError(cause=cause, extra=extra),
-            from_error=from_error,
+            caused_by=caused_by,
             skip_error_log=skip_error_log,
         )
 
@@ -529,16 +773,27 @@ class Loggy:
         *,
         record: HashableObject,
         other_record: HashableObject,
-        from_error: Exception | None = None,
+        caused_by: Exception | None = None,
         skip_error_log: bool = False,
         **extra: Any,
     ) -> RecordableIdentityError:
-        """Creates, logs, and returns a `RecordableIdentityError`."""
-        return self._log_and_return_error(
+        """Creates, logs, and returns a `RecordableIdentityError`.
+
+        Args:
+            `record` (`HashableObject`): The first record.
+            `other_record` (`HashableObject`): The second record.
+            `caused_by` (`Exception | None`, optional): The error to wrap. Defaults to `None`.
+            `skip_error_log` (`bool`, optional): If `True`, logging is skipped. Defaults to `False`.
+            `extra` (`Any`, optional): Additional details to include in the log.
+
+        Returns:
+            `RecordableIdentityError`: The created error instance.
+        """
+        return self._log_and_return_astro_error(
             error=RecordableIdentityError(
                 record=record, other_record=other_record, extra=extra
             ),
-            from_error=from_error,
+            caused_by=caused_by,
             skip_error_log=skip_error_log,
         )
 
@@ -548,17 +803,64 @@ class Loggy:
         var_name: str,
         got: type,
         expected: Sequence[type] | type,
-        from_error: Exception | None = None,
+        caused_by: Exception | None = None,
         skip_error_log: bool = False,
         **extra: Any,
     ) -> ExpectedVarType:
-        """Creates, logs, and returns an `ExpectedVarType`."""
-        return self._log_and_return_error(
+        """Creates, logs, and returns an `ExpectedVarType`.
+
+        Args:
+            `var_name` (`str`): The name of the variable.
+            `got` (`type`): The type received.
+            `expected` (`Sequence[type] | type`): The type(s) expected.
+            `caused_by` (`Exception | None`, optional): The error to wrap. Defaults to `None`.
+            `skip_error_log` (`bool`, optional): If `True`, logging is skipped. Defaults to `False`.
+            `extra` (`Any`, optional): Additional details to include in the log.
+
+        Returns:
+            `ExpectedVarType`: The created error instance.
+        """
+        return self._log_and_return_astro_error(
             error=ExpectedVarType(
                 var_name=var_name, got=got, expected=expected, extra=extra
             ),
-            from_error=from_error,
+            caused_by=caused_by,
             skip_error_log=skip_error_log,
+        )
+
+    def ExpectedElementTypeError(
+        self,
+        *,
+        collection_var_name: str,
+        got: type,
+        expected: Sequence[type] | type,
+        index_or_key: int | Any | None = None,
+        extra: NamedDict | None = None,
+        caused_by: Exception | None = None,
+    ) -> ExpectedElementTypeError:
+        """Creates, logs, and returns an `ExpectedElementTypeError`.
+
+        Args:
+            `collection_var_name` (`str`): The name of the collection variable.
+            `got` (`type`): The type received.
+            `expected` (`Sequence[type] | type`): The type(s) expected.
+            `index_or_key` (`int | Any | None`, optional): The index or key where the error occurred. Defaults to `None`.
+            `extra` (`NamedDict | None`, optional): Additional details to include in the log. Defaults to `None`.
+            `caused_by` (`Exception | None`, optional): The error to wrap. Defaults to `None`.
+
+        Returns:
+            `ExpectedElementTypeError`: The created error instance.
+        """
+        return self._log_and_return_astro_error(
+            error=ExpectedElementTypeError(
+                collection_var_name=collection_var_name,
+                got=got,
+                expected=expected,
+                index_or_key=index_or_key,
+                extra=extra,
+            ),
+            caused_by=caused_by,
+            skip_error_log=False,
         )
 
     def ExpectedTypeError(
@@ -566,14 +868,25 @@ class Loggy:
         *,
         got: type,
         expected: Sequence[type] | type,
-        from_error: Exception | None = None,
+        caused_by: Exception | None = None,
         skip_error_log: bool = False,
         **extra: Any,
     ) -> ExpectedTypeError:
-        """Creates, logs, and returns an `ExpectedTypeError`."""
-        return self._log_and_return_error(
+        """Creates, logs, and returns an `ExpectedTypeError`.
+
+        Args:
+            `got` (`type`): The type received.
+            `expected` (`Sequence[type] | type`): The type(s) expected.
+            `caused_by` (`Exception | None`, optional): The error to wrap. Defaults to `None`.
+            `skip_error_log` (`bool`, optional): If `True`, logging is skipped. Defaults to `False`.
+            `extra` (`Any`, optional): Additional details to include in the log.
+
+        Returns:
+            `ExpectedTypeError`: The created error instance.
+        """
+        return self._log_and_return_astro_error(
             error=ExpectedTypeError(got=got, expected=expected, extra=extra),
-            from_error=from_error,
+            caused_by=caused_by,
             skip_error_log=skip_error_log,
         )
 
@@ -582,14 +895,25 @@ class Loggy:
         *,
         got: type,
         expected: Sequence[type] | type,
-        from_error: Exception | None = None,
+        caused_by: Exception | None = None,
         skip_error_log: bool = False,
         **extra: Any,
     ) -> KeyTypeError:
-        """Creates, logs, and returns a `KeyTypeError`."""
-        return self._log_and_return_error(
+        """Creates, logs, and returns a `KeyTypeError`.
+
+        Args:
+            `got` (`type`): The type received.
+            `expected` (`Sequence[type] | type`): The type(s) expected.
+            `caused_by` (`Exception | None`, optional): The error to wrap. Defaults to `None`.
+            `skip_error_log` (`bool`, optional): If `True`, logging is skipped. Defaults to `False`.
+            `extra` (`Any`, optional): Additional details to include in the log.
+
+        Returns:
+            `KeyTypeError`: The created error instance.
+        """
+        return self._log_and_return_astro_error(
             error=KeyTypeError(got=got, expected=expected, extra=extra),
-            from_error=from_error,
+            caused_by=caused_by,
             skip_error_log=skip_error_log,
         )
 
@@ -597,14 +921,24 @@ class Loggy:
         self,
         *,
         got: type,
-        from_error: Exception | None = None,
+        caused_by: Exception | None = None,
         skip_error_log: bool = False,
         **extra: Any,
     ) -> KeyStrError:
-        """Creates, logs, and returns a `KeyStrError`."""
-        return self._log_and_return_error(
+        """Creates, logs, and returns a `KeyStrError`.
+
+        Args:
+            `got` (`type`): The type received.
+            `caused_by` (`Exception | None`, optional): The error to wrap. Defaults to `None`.
+            `skip_error_log` (`bool`, optional): If `True`, logging is skipped. Defaults to `False`.
+            `extra` (`Any`, optional): Additional details to include in the log.
+
+        Returns:
+            `KeyStrError`: The created error instance.
+        """
+        return self._log_and_return_astro_error(
             error=KeyStrError(got=got, extra=extra),
-            from_error=from_error,
+            caused_by=caused_by,
             skip_error_log=skip_error_log,
         )
 
@@ -613,18 +947,29 @@ class Loggy:
         *,
         got: type,
         expected: Sequence[type] | type,
-        from_error: Exception | None = None,
+        caused_by: Exception | None = None,
         skip_error_log: bool = False,
         **extra: Any,
     ) -> ValueTypeError:
-        """Creates, logs, and returns a `ValueTypeError`."""
-        return self._log_and_return_error(
+        """Creates, logs, and returns a `ValueTypeError`.
+
+        Args:
+            `got` (`type`): The type received.
+            `expected` (`Sequence[type] | type`): The type(s) expected.
+            `caused_by` (`Exception | None`, optional): The error to wrap. Defaults to `None`.
+            `skip_error_log` (`bool`, optional): If `True`, logging is skipped. Defaults to `False`.
+            `extra` (`Any`, optional): Additional details to include in the log.
+
+        Returns:
+            `ValueTypeError`: The created error instance.
+        """
+        return self._log_and_return_astro_error(
             error=ValueTypeError(got=got, expected=expected, extra=extra),
-            from_error=from_error,
+            caused_by=caused_by,
             skip_error_log=skip_error_log,
         )
 
-    def NoEntryKeyError(
+    def NoEntryError(
         self,
         *,
         key_value: Any,
@@ -633,14 +978,25 @@ class Loggy:
         | RecordableModel
         | ImmutableRecord
         | None = None,
-        from_error: Exception | None = None,
+        caused_by: Exception | None = None,
         skip_error_log: bool = False,
         **extra: Any,
-    ) -> NoEntryKeyError:
-        """Creates, logs, and returns a `NoEntryKeyError`."""
-        return self._log_and_return_error(
-            error=NoEntryKeyError(key_value=key_value, sources=sources, extra=extra),
-            from_error=from_error,
+    ) -> NoEntryError:
+        """Creates, logs, and returns a `NoEntryError`.
+
+        Args:
+            `key_value` (`Any`): The key that was not found.
+            `sources` (`Sequence[str | RecordableModel | ImmutableRecord] | str | RecordableModel | ImmutableRecord | None`, optional): The source(s) that were searched. Defaults to `None`.
+            `caused_by` (`Exception | None`, optional): The error to wrap. Defaults to `None`.
+            `skip_error_log` (`bool`, optional): If `True`, logging is skipped. Defaults to `False`.
+            `extra` (`Any`, optional): Additional details to include in the log.
+
+        Returns:
+            `NoEntryKeyError`: The created error instance.
+        """
+        return self._log_and_return_astro_error(
+            error=NoEntryError(key_value=key_value, sources=sources, extra=extra),
+            caused_by=caused_by,
             skip_error_log=skip_error_log,
         )
 
@@ -650,19 +1006,31 @@ class Loggy:
         path_or_uid: StrPath | int | None = None,
         obj_or_key: RecordableModel | ImmutableRecord | Any | None = None,
         load_from: str | None = None,
-        from_error: Exception | None = None,
+        caused_by: Exception | None = None,
         skip_error_log: bool = False,
         **extra: Any,
     ) -> LoadError:
-        """Creates, logs, and returns a `LoadError`."""
-        return self._log_and_return_error(
+        """Creates, logs, and returns a `LoadError`.
+
+        Args:
+            `path_or_uid` (`StrPath | int | None`, optional): The path or UID of the object that failed to load. Defaults to `None`.
+            `obj_or_key` (`RecordableModel | ImmutableRecord | Any | None`, optional): The object or key that failed to load. Defaults to `None`.
+            `load_from` (`str | None`, optional): The source from which the object was being loaded. Defaults to `None`.
+            `caused_by` (`Exception | None`, optional): The error to wrap. Defaults to `None`.
+            `skip_error_log` (`bool`, optional): If `True`, logging is skipped. Defaults to `False`.
+            `extra` (`Any`, optional): Additional details to include in the log.
+
+        Returns:
+            `LoadError`: The created error instance.
+        """
+        return self._log_and_return_astro_error(
             error=LoadError(
                 path_or_uid=path_or_uid,
                 obj_or_key=obj_or_key,
                 load_from=load_from,
                 extra=extra,
             ),
-            from_error=from_error,
+            caused_by=caused_by,
             skip_error_log=skip_error_log,
         )
 
@@ -672,37 +1040,68 @@ class Loggy:
         path_or_uid: StrPath | None = None,
         obj_to_save: RecordableModel | ImmutableRecord | Any | None = None,
         save_to: str | None = None,
-        from_error: Exception | None = None,
+        caused_by: Exception | None = None,
         skip_error_log: bool = False,
         **extra: Any,
     ) -> SaveError:
-        """Creates, logs, and returns a `SaveError`."""
-        return self._log_and_return_error(
+        """Creates, logs, and returns a `SaveError`.
+
+        Args:
+            `path_or_uid` (`StrPath | None`, optional): The path or UID of the object that failed to save. Defaults to `None`.
+            `obj_to_save` (`RecordableModel | ImmutableRecord | Any | None`, optional): The object that failed to save. Defaults to `None`.
+            `save_to` (`str | None`, optional): The destination where the object was being saved. Defaults to `None`.
+            `caused_by` (`Exception | None`, optional): The error to wrap. Defaults to `None`.
+            `skip_error_log` (`bool`, optional): If `True`, logging is skipped. Defaults to `False`.
+            `extra` (`Any`, optional): Additional details to include in the log.
+
+        Returns:
+            `SaveError`: The created error instance.
+        """
+        return self._log_and_return_astro_error(
             error=SaveError(
                 path_or_uid=path_or_uid,
                 obj_to_save=obj_to_save,
                 save_to=save_to,
                 extra=extra,
             ),
-            from_error=from_error,
+            caused_by=caused_by,
             skip_error_log=skip_error_log,
         )
 
-    def ModelStoreError(
+    def ModelFileStoreError(
         self,
         *,
         operation: str,
-        store_name: str | None = None,
-        from_error: Exception | None = None,
+        reason: str | None = None,
+        stores: ModelFileStore | Sequence[ModelFileStore] | None = None,
+        model_or_uid: RecordableModel | type[RecordableModel] | str | None = None,
+        caused_by: Exception | None = None,
         skip_error_log: bool = False,
         **extra: Any,
-    ) -> ModelStoreError:
-        """Creates, logs, and returns a `ModelStoreError`."""
-        return self._log_and_return_error(
-            error=ModelStoreError(
-                operation=operation, store_name=store_name, extra=extra
+    ) -> ModelFileStoreError:
+        """Creates, logs, and returns a `ModelFileStoreError`.
+
+        Args:
+            `operation` (`str`): The operation that failed.
+            `reason` (`str | None`, optional): The reason for the failure. Defaults to `None`.
+            `store` (`ModelFileStore | Sequence[ModelFileStore] | None`, optional): The name of the store. Defaults to `None`.
+            `model_or_uid` (`RecordableModel | type[RecordableModel] | str | None`, optional): The model involved in the operation. Defaults to `None`.
+            `caused_by` (`Exception | None`, optional): The error to wrap. Defaults to `None`.
+            `skip_error_log` (`bool`, optional): If `True`, logging is skipped. Defaults to `False`.
+            `extra` (`Any`, optional): Additional details to include in the log.
+
+        Returns:
+            `ModelFileStoreError`: The created error instance.
+        """
+        return self._log_and_return_astro_error(
+            error=ModelFileStoreError(
+                operation=operation,
+                reason=reason,
+                stores=stores,
+                model_or_uid=model_or_uid,
+                extra=extra,
             ),
-            from_error=from_error,
+            caused_by=caused_by,
             skip_error_log=skip_error_log,
         )
 
@@ -750,7 +1149,7 @@ def setup_logging():
     _setup_done = True
 
 
-def get_logger(filepath: StrPath) -> "Loggy":
+def get_loggy(filepath: StrPath) -> "Loggy":
     """Retrieves a configured logger instance for a given module.
 
     This function ensures that logging is set up before returning a `Loggy`
@@ -775,8 +1174,8 @@ if __name__ == "__main__":
     from astro.paths import _LOG_DIR
 
     print(_LOG_DIR)
-    main_logger = get_logger(__file__)
-    util_logger = get_logger(Path(__file__).parent / "util.py")
+    main_logger = get_loggy(__file__)
+    util_logger = get_loggy(Path(__file__).parent / "util.py")
 
     main_logger.debug("Debug message (not shown)")
     main_logger.info("Info message")
@@ -784,7 +1183,7 @@ if __name__ == "__main__":
     util_logger.error("Error message")
 
     try:
-        1 / 0
+        1 / 0  # type: ignore
     except ZeroDivisionError:
         main_logger.exception("Exception occurred")
 

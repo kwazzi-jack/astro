@@ -32,7 +32,7 @@ from sqlalchemy.exc import IntegrityError
 from sqlmodel import Session, select
 
 from astro.errors import ExpectedVarType
-from astro.loggings import get_logger
+from astro.loggings import get_loggy
 from astro.typings import (
     ImmutableRecord,
     ImmutableRecordType,
@@ -44,7 +44,7 @@ from astro.typings import (
 from astro.utilities.timing import get_datetime_now
 
 # Global logger
-_logger = get_logger(__file__)
+_logger = get_loggy(__file__)
 
 
 class Store(Generic[RecordableModelType, ImmutableRecordType]):

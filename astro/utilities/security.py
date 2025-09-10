@@ -7,15 +7,11 @@ import blake3
 from dotenv import dotenv_values
 from pydantic import SecretStr
 
-from astro.errors import (
-    _expected_key_str_value_error,
-    _no_entry_key_error,
-)
-from astro.loggings.base import get_logger
+from astro.loggings.base import get_loggy
 from astro.paths import _BASE_SECRETS_PATH
 from astro.typings import type_name
 
-logger = get_logger("astro.utilities.security")
+loggy = get_loggy("astro.utilities.security")
 
 
 def checksum(
@@ -28,20 +24,18 @@ def checksum(
 
     if not path.exists():
         # File does not exist
-        msg = f"File does not exist: `{path}`"
-        logger.error(msg)
-        raise FileNotFoundError(msg)
+        raise loggy.FileNotFoundError(f"File does not exist: `{path}`")
 
     # Run checksum algorithm
     total = 0
-    logger.debug(f"Running checksum on '{path.name}' with `{chunk_size=}`")
+    loggy.debug(f"Running checksum on '{path.name}' with `{chunk_size=}`")
     with open(path, "rb") as file:
         # Run with chunks if > 0
         while chunk := file.read(chunk_size):
             total = zlib.crc32(chunk, total)
 
     # Return checksum
-    logger.debug(f"Checksum complete: {total}")
+    loggy.debug(f"Checksum complete: {total}")
     return total
 
 
@@ -53,33 +47,31 @@ def files_differ(file1: str | Path, file2: str | Path, chunk_size: int = -1) -> 
 def get_secret_key(key: str) -> SecretStr:
     # Input validation
     if _BASE_SECRETS_PATH is None:
-        raise FileNotFoundError(
+        raise loggy.FileNotFoundError(
             "Secrets file has not been set. Ensure one is present at `$ASTRO_HOME`. "
             "#TODO - Add functionality to add keys dynamically"
         )
 
     if not isinstance(key, str):
-        raise _expected_key_str_value_error(got=type(key))
+        raise
 
     if not _BASE_SECRETS_PATH.exists():
-        error_msg = (
+        raise loggy.FileNotFoundError(
             "Secrets file cannot be found. Ensure one is present at `$ASTRO_HOME`. "
             "#TODO - Add functionality to add keys dynamically"
         )
-        raise ValueError(error_msg)
 
     secrets_dict = dotenv_values(_BASE_SECRETS_PATH)
     if len(secrets_dict) == 0:
         raise ValueError("Secrets file is empty")
 
     if key not in secrets_dict:
-        raise _no_entry_key_error(key_value=key)
+        raise loggy.NoEntryError(key_value=key)
 
     secret_value = secrets_dict[key]
     if not isinstance(secret_value, str):
-        raise ValueError(
-            f"Secret key `{key}` has a non-string value `{secret_value}` (of type `{type_name(secret_value)}`)"
-        )
+        raise loggy.ExpectedVarType(var_name=key, got=type(secret_value), expected=str)
+
     return SecretStr(secret_value)
 
 

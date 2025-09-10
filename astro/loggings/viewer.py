@@ -11,11 +11,11 @@ import streamlit as st
 from streamlit import runtime
 from streamlit.web import cli as stcli
 
-from astro.loggings.base import _get_log_file, get_logger
+from astro.loggings.base import _get_log_file, get_loggy
 from astro.paths import find_latest_log_file, get_available_log_files, get_module_dir
 
 # Load logger
-_logger = get_logger(__file__)
+_logger = get_loggy(__file__)
 
 
 # Log level colors (matching original textual viewer)

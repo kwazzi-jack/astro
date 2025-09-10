@@ -3,10 +3,10 @@ from enum import StrEnum
 
 from pydantic import BaseModel, ConfigDict, Field
 
-from astro.loggings.base import LogLevel, get_logger
+from astro.loggings.base import LogLevel, get_loggy
 
 # Load logger
-_logger = get_logger(__file__)
+_logger = get_loggy(__file__)
 
 
 class DisplayTheme(StrEnum):

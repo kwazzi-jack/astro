@@ -15,10 +15,10 @@ from astro.typings import (
 )
 
 # Global logger variable
-_logger = None
+_loggy = None
 
 
-def _get_logger():
+def _get_loggy():
     """Get or initialize the global logger for paths module.
 
     Returns the global logger instance, creating it if it hasn't been initialized yet.
@@ -28,16 +28,16 @@ def _get_logger():
     Returns:
         The logger instance for this module.
     """
-    global _logger
+    global _loggy
 
     # If no logger -> set one
-    if _logger is None:
+    if _loggy is None:
         from astro.loggings.base import Loggy
 
-        _logger = Loggy(__file__)
+        _loggy = Loggy(__file__)
 
     # Return logger, initialized or pre-initialized
-    return _logger
+    return _loggy
 
 
 def get_module_dir(file_path: str | None = None) -> Path:
@@ -55,20 +55,27 @@ def get_module_dir(file_path: str | None = None) -> Path:
         >>> get_module_dir('/path/to/some/file.py')
         PosixPath('/path/to/some')
     """
-    logger = _get_logger()
-    logger.debug(f"Getting module directory for file_path: {file_path}")
+    loggy = _get_loggy()
+    loggy.debug(f"Getting module directory for file_path: {file_path}")
 
     # Use astro/paths.py as reference
     if file_path is None:
         result = Path(__file__).parent.parent.resolve()
-        logger.debug(f"Using current module reference, returning: {result}")
+        loggy.debug(f"Using current module reference, returning: {result}")
         return result
 
     # Use specified astro file
     else:
-        result = Path(file_path).parent.resolve()
-        logger.debug(f"Using specified file path, returning: {result}")
-        return result
+        try:
+            result = Path(file_path).parent.resolve()
+            loggy.debug(f"Using specified file path, returning: {result}")
+            return result
+        except Exception as error:
+            raise loggy.IOError(
+                f"Error resolving path for file: {file_path}",
+                caused_by=error,
+                file_path=file_path,
+            )
 
 
 def get_file_modification_time(file_path: Path) -> float:
@@ -83,16 +90,19 @@ def get_file_modification_time(file_path: Path) -> float:
     Raises:
         OSError: If the file cannot be accessed.
     """
-    logger = _get_logger()
-    logger.debug(f"Getting modification time for: {file_path}")
+    loggy = _get_loggy()
+    loggy.debug(f"Getting modification time for: {file_path}")
 
     try:
         mod_time = file_path.stat().st_mtime
-        logger.debug(f"File {file_path} modified at: {mod_time}")
+        loggy.debug(f"File {file_path} modified at: {mod_time}")
         return mod_time
     except Exception as error:
-        logger.error(f"Failed to get modification time for {file_path}: {error}")
-        raise OSError(f"Cannot access file modification time: {file_path}") from error
+        raise loggy.OSError(
+            f"Cannot access file modification time: {file_path}",
+            file_path=file_path,
+            caused_by=error,
+        )
 
 
 def find_latest_log_file(log_dir: Path, pattern: str = "*.jsonl") -> Path | None:
@@ -105,27 +115,30 @@ def find_latest_log_file(log_dir: Path, pattern: str = "*.jsonl") -> Path | None
     Returns:
         Path to the most recent log file, or None if no files found.
     """
-    logger = _get_logger()
-    logger.debug(f"Finding latest log file in {log_dir} with pattern: {pattern}")
+    loggy = _get_loggy()
+    loggy.debug(f"Finding latest log file in {log_dir} with pattern: {pattern}")
 
     if not log_dir.exists() or not log_dir.is_dir():
-        logger.warning(f"Log directory does not exist or is not a directory: {log_dir}")
+        loggy.warning(f"Log directory does not exist or is not a directory: {log_dir}")
         return None
 
     try:
         log_files = list(log_dir.glob(pattern))
         if not log_files:
-            logger.info(f"No log files found in {log_dir} matching {pattern}")
+            loggy.warning(f"No log files found in {log_dir} matching {pattern}")
             return None
 
         # Find the file with the latest modification time
         latest_file = max(log_files, key=get_file_modification_time)
-        logger.info(f"Latest log file found: {latest_file}")
+        loggy.info(f"Latest log file found: {latest_file}")
         return latest_file
 
     except Exception as error:
-        logger.error(f"Error finding latest log file in {log_dir}: {error}")
-        return None
+        raise loggy.FileNotFoundError(
+            f"Error finding latest log file in {log_dir}",
+            pattern=pattern,
+            caused_by=error,
+        ) from error
 
 
 def get_available_log_files(log_dir: Path, pattern: str = "*.jsonl") -> list[Path]:
@@ -138,27 +151,30 @@ def get_available_log_files(log_dir: Path, pattern: str = "*.jsonl") -> list[Pat
     Returns:
         List of log file paths sorted by modification time, newest first.
     """
-    logger = _get_logger()
-    logger.debug(f"Getting available log files in {log_dir} with pattern: {pattern}")
+    loggy = _get_loggy()
+    loggy.debug(f"Getting available log files in {log_dir} with pattern: {pattern}")
 
     if not log_dir.exists() or not log_dir.is_dir():
-        logger.warning(f"Log directory does not exist or is not a directory: {log_dir}")
+        loggy.warning(f"Log directory does not exist or is not a directory: {log_dir}")
         return []
 
     try:
         log_files = list(log_dir.glob(pattern))
         if not log_files:
-            logger.info(f"No log files found in {log_dir} matching {pattern}")
+            loggy.warning(f"No log files found in {log_dir} matching {pattern}")
             return []
 
         # Sort by modification time, newest first
         sorted_files = sorted(log_files, key=get_file_modification_time, reverse=True)
-        logger.info(f"Found {len(sorted_files)} log files in {log_dir}")
+        loggy.info(f"Found {len(sorted_files)} log files in {log_dir}")
         return sorted_files
 
     except Exception as error:
-        logger.error(f"Error getting available log files in {log_dir}: {error}")
-        return []
+        raise loggy.OSError(
+            f"Error getting available log files in {log_dir}",
+            file_path=log_dir,
+            caused_by=error,
+        )
 
 
 def read_markdown_file(markdown_file_path: str | Path) -> str:
@@ -173,33 +189,35 @@ def read_markdown_file(markdown_file_path: str | Path) -> str:
         FileNotFoundError: If the specified file does not exist.
         RuntimeError: If there are issues reading the file (permissions, etc.).
     """
-    logger = _get_logger()
-    logger.debug(f"Reading markdown file: {markdown_file_path}")
+    loggy = _get_loggy()
+    loggy.debug(f"Reading markdown file: {markdown_file_path}")
 
     # If string file path, convert to Path
     if isinstance(markdown_file_path, str):
         markdown_file_path = Path(markdown_file_path)
-        logger.debug(f"Converted string path to Path object: {markdown_file_path}")
+        loggy.debug(f"Converted string path to Path object: {markdown_file_path}")
 
     # Validate file exists
     if not markdown_file_path.exists():
-        logger.error(f"Markdown file does not exist: {markdown_file_path}")
-        raise FileNotFoundError(f"File `{markdown_file_path}` does not exist")
+        raise loggy.FileNotFoundError(
+            f"File `{markdown_file_path}` does not exist", file_path=markdown_file_path
+        )
 
     # Return contents of markdown file
     try:
         with open(markdown_file_path, encoding="utf-8") as file:
             contents = file.read().strip()
-            logger.info(
+            loggy.info(
                 f"Successfully read markdown file: {markdown_file_path} ({len(contents)} characters)"
             )
             return contents
     # Error while opening file
     except Exception as error:
-        logger.error(f"Failed to read markdown file {markdown_file_path}: {error}")
-        raise OSError(
-            f"Error while trying to open markdown file '{markdown_file_path}'"
-        ) from error
+        raise loggy.LoadError(
+            path_or_uid=markdown_file_path,
+            load_from="file",
+            caused_by=error,
+        )
 
 
 class ModelFileStore(Generic[RecordableModelType]):
@@ -235,26 +253,24 @@ class ModelFileStore(Generic[RecordableModelType]):
             `ValueError`: If model_type is not a subclass of `TraceableModel`.
             `IOError`: If `ModelFileStore` encounters an error while saving or loading the index file.
         """
-        logger = _get_logger()
-        logger.debug(
+        loggy = _get_loggy()
+        loggy.debug(
             f"Initializing ModelFileStore for {model_type.__name__ if hasattr(model_type, '__name__') else model_type} at {root_dir}"
         )
 
         # Create assigned directory if it does not exist
         root_dir.mkdir(exist_ok=True)
-        logger.debug(f"Created/verified directory: {root_dir}")
+        loggy.debug(f"Created/verified directory: {root_dir}")
 
         # Validate `model_type` is subclass of `TraceableModel`
         if not (
             isinstance(model_type, type) and issubclass(model_type, RecordableModel)
         ):
-            error = ExpectedVarType(
+            raise loggy.ExpectedVarType(
                 var_name="model_type",
                 got=model_type,
                 expected=RecordableModel,
             )
-            logger.error(error.to_log())
-            raise error
 
         # Attributes
         self._name = root_dir.name
@@ -263,22 +279,22 @@ class ModelFileStore(Generic[RecordableModelType]):
         self._index_file = root_dir / "index"
         self._index_map = {}  # type: PathDict
 
-        logger.debug(f"Set up ModelFileStore attributes for {self._name}")
+        loggy.debug(f"Set up ModelFileStore attributes for {self._name}")
 
         # Index file present -> load from file
         if self._index_file.exists():
-            logger.debug(f"Loading existing index file: {self._index_file}")
+            loggy.debug(f"Loading existing index file: {self._index_file}")
             self._index_map = self._load_index()
-            logger.info(
+            loggy.info(
                 f"Loaded {len(self._index_map)} entries from existing index for {self._name}"
             )
 
         # No index file -> create clean file
         else:
-            logger.debug(f"Creating new index file: {self._index_file}")
+            loggy.debug(f"Creating new index file: {self._index_file}")
             self._index_map = {}
             self._save_index()
-            logger.info(f"Created new empty index for {self._name}")
+            loggy.info(f"Created new empty index for {self._name}")
 
     @property
     def name(self) -> str:
@@ -308,6 +324,8 @@ class ModelFileStore(Generic[RecordableModelType]):
         Raises:
             `IOError`: If an error occurs while writing to the index file.
         """
+        loggy = _get_loggy()
+        loggy.debug(f"Saving index to file: {self.index_file}")
 
         # Convert path dictionary to strings (serialiazable)
         str_dict = _path_dict_to_str_dict(self._index_map)
@@ -319,9 +337,12 @@ class ModelFileStore(Generic[RecordableModelType]):
 
         except Exception as error:
             # An error occurred - propagate up
-            raise IOError(
-                f"Error occurred while loading from index file `{self.index_file}`"
-            ) from error
+            raise loggy.SaveError(
+                path_or_uid=self.index_file,
+                obj_to_save=str_dict,
+                save_to="model store index file",
+                caused_by=error,
+            )
 
     def _load_index(self) -> PathDict:
         """Load the index mapping from the index file.
@@ -334,6 +355,9 @@ class ModelFileStore(Generic[RecordableModelType]):
         Raises:
             `IOError`: If an error occurs while reading or parsing the index file.
         """
+
+        loggy = _get_loggy()
+        loggy.debug(f"Loading index from file: {self.index_file}")
 
         try:
             # Load string dictionary from index file
@@ -348,9 +372,11 @@ class ModelFileStore(Generic[RecordableModelType]):
 
         except Exception as error:
             # An error occurred - propagate up
-            raise IOError(
-                f"Error occurred while saving to index file `{self.index_file}`"
-            ) from error
+            raise loggy.LoadError(
+                path_or_uid=self.index_file,
+                load_from="model store index file",
+                caused_by=error,
+            )
 
     def _save_object(self, obj: RecordableModelType):
         """Serialize and save a model object to its associated file path.
@@ -364,16 +390,16 @@ class ModelFileStore(Generic[RecordableModelType]):
             `ValueError`: If `obj` is not an instance of the configured model type.
             `IOError`: If an error occurs while saving the object to disk.
         """
+        loggy = _get_loggy()
+        loggy.debug(f"Saving object of type {type_name(obj)} with UID: {obj.uid}")
 
         # Input type validation
         if not isinstance(obj, self.model_type):
-            error = ExpectedVarType(
+            raise loggy.ExpectedVarType(
                 var_name="obj",
                 got=type(obj),
                 expected=self.model_type,
             )
-            logger.error(error.to_log())
-            raise error
 
         try:
             # Fetch file path based on UID
@@ -385,9 +411,12 @@ class ModelFileStore(Generic[RecordableModelType]):
 
         except Exception as error:
             # An error occurred - propagate up
-            raise IOError(
-                f"Error while saving `{type_name(obj)}` ({obj.uid})"
-            ) from error
+            raise loggy.SaveError(
+                path_or_uid=obj.uid,
+                obj_to_save=type_name(obj),
+                save_to="model file",
+                caused_by=error,
+            )
 
     def _load_object(self, key: str) -> RecordableModelType:
         """Load and deserialize a model object from its associated file path.
@@ -405,11 +434,11 @@ class ModelFileStore(Generic[RecordableModelType]):
             `IOError`: If an error occurs while loading or parsing the file.
         """
 
+        loggy = _get_loggy()
+
         # Input type validation
         if not isinstance(key, str):
-            error = KeyStrError(got=type(key))
-            logger.error(error.to_log())
-            raise error
+            raise loggy.KeyStrError(got=type(key))
 
         file_path = None
         try:
@@ -422,12 +451,14 @@ class ModelFileStore(Generic[RecordableModelType]):
 
             # Create assigned model type based on contents
             return self.model_type.model_validate(contents)
-
         except Exception as error:
             # An error occurred - propagate up
-            outer_error = LoadError(path_or_uid=file_path)
-            logger.error(**outer_error.to_log())
-            raise outer_error from error
+            raise loggy.LoadError(
+                path_or_uid=file_path,
+                load_from="model file",
+                key_of_object=key,
+                caused_by=error,
+            )
 
     def __getitem__(self, key: str) -> Path:
         """Retrieve the file path associated with a given key.
@@ -444,18 +475,15 @@ class ModelFileStore(Generic[RecordableModelType]):
             `ValueError`: If `key` is not a string.
             `KeyError`: If `key` is not present in the index.
         """
+        loggy = _get_loggy()
 
         # Input type validation
         if not isinstance(key, str):
-            error = KeyStrError(got=type(key))
-            logger.error(**error.to_log())
-            raise error
+            raise loggy.KeyStrError(got=type(key))
 
         # No entry associated with key
         if key not in self:
-            error = NoEntryKeyError(key_value=key)
-            logger.error(**error.to_log())
-            raise error
+            raise loggy.NoEntryError(key_value=key)
 
         # Return path associated with key
         return self._index_map[key]
@@ -473,17 +501,14 @@ class ModelFileStore(Generic[RecordableModelType]):
             `ValueError`: If `key` is not a string or `value` is not a Path.
             `IOError`: If an error occurs while updating the index file.
         """
+        loggy = _get_loggy()
 
         # Input type validation
         if not isinstance(key, str):
-            error = KeyStrError(got=type(key))
-            logger.error(**error.to_log())
-            raise error
+            raise loggy.KeyStrError(got=type(key))
 
         if not isinstance(value, Path):
-            error = ValueTypeError(got=type(value), expected=Path)
-            logger.error(**error.to_log())
-            raise error
+            raise loggy.ValueTypeError(got=type(value), expected=Path)
 
         # Set associated key with given value
         self._index_map[key] = value
@@ -506,17 +531,15 @@ class ModelFileStore(Generic[RecordableModelType]):
             `KeyError`: If `key` is not present in the index.
             `IOError`: If an error occurs while deleting the file or updating the index file.
         """
+        loggy = _get_loggy()
+
         # Input type validation
         if not isinstance(key, str):
-            error = KeyStrError(got=type(key))
-            logger.error(**error.to_log())
-            raise error
+            raise loggy.KeyStrError(got=type(key))
 
         # No entry associated with key
         if key not in self:
-            error = NoEntryKeyError(key_value=key)
-            logger.error(**error.to_log())
-            raise error
+            raise loggy.NoEntryError(key_value=key)
 
         # Fetch file path based on key and delete
         file_path = self[key]
@@ -551,15 +574,15 @@ class ModelFileStore(Generic[RecordableModelType]):
         Raises:
             `ValueError`: If `key_or_obj` is not a string or an instance of the configured model type.
         """
+        loggy = _get_loggy()
+
         # Input type validation
         if not isinstance(key_or_obj, (str, self.model_type)):
-            error = ExpectedVarType(
+            raise loggy.ExpectedVarType(
                 var_name="key_or_obj",
                 got=type(key_or_obj),
                 expected=(str, self.model_type),
             )
-            logger.error(**error.to_log())
-            raise error
 
         # Return if key or UID has associated entry
         if isinstance(key_or_obj, str):
@@ -579,13 +602,15 @@ class ModelFileStore(Generic[RecordableModelType]):
             `Model` | `Any`: The loaded model object if the key is found,
             otherwise the default value.
         """
+        logger = _get_loggy()
+
         # If key present, load object
         if key in self:
             try:
                 return self._load_object(key)
 
             # Return default if any error
-            except LoadError:
+            except Exception:
                 logger.debug("Encountered load error. Returning default")
                 return default
 
@@ -605,9 +630,11 @@ class ModelFileStore(Generic[RecordableModelType]):
             `ValueError`: If `obj` is not an instance of the configured model type.
             `IOError`: If an error occurs while saving the object or updating the index.
         """
+        loggy = _get_loggy()
+
         # Input type validation
         if not isinstance(obj, self.model_type):
-            raise ExpectedVarType(
+            raise loggy.ExpectedVarType(
                 var_name="obj", got=type(obj), expected=self.model_type
             )
 
@@ -634,10 +661,11 @@ class ModelFileStore(Generic[RecordableModelType]):
             `ValueError`: If `key_or_obj` is not a string or an instance of the configured model type.
             `IOError`: If an error occurs while deleting the file or updating the index.
         """
+        loggy = _get_loggy()
 
         # Input type validation
         if not isinstance(key_or_obj, (str, self.model_type)):
-            raise ExpectedVarType(
+            raise loggy.ExpectedVarType(
                 var_name="key_or_obj",
                 got=type(key_or_obj),
                 expected=(str, self.model_type),
@@ -767,7 +795,7 @@ def setup_paths():
         _STORES_DIR.mkdir(exist_ok=True)
 
     # Something went wrong when setting up paths
-    except Exception as error:
+    except Exception as error:  # NOTE - Non-loggy errors that occur before logger setup
         raise IOError("Error occurred while setting up paths") from error
 
     # Flag that paths are setup
@@ -794,35 +822,36 @@ def _load_store_white_list():
         Restart the application if changes to the white list are needed, as it
         is not re-created if already populated.
     """
-    logger = _get_logger()
-    logger.debug("Loading store white list")
+    loggy = _get_loggy()
+    loggy.debug("Loading store white list")
 
     global _STORE_WHITE_LIST_MAP
 
     # Non-empty list will not get re-created
-    # IMPORTANT - B - restart Astro instead
+    # Brian - restart Astro instead
     if len(_STORE_WHITE_LIST_MAP):
-        logger.debug(
-            f"Store white list already loaded with {len(_STORE_WHITE_LIST_MAP)} entries"
+        loggy.warning(
+            f"Store white list already loaded with {len(_STORE_WHITE_LIST_MAP)} entries. "
+            "Restart Astro to reload pathing."
         )
         return
 
     try:
         # List of TraceableModels to white list
-        # IMPORTANT - B - This governs which models can be stored
+        # Brian - This governs which models can be stored
         from astro.llms import LLMConfig
 
         # Create list based on above
         _STORE_WHITE_LIST_MAP = {LLMConfig.__name__: LLMConfig}
-        logger.info(
+        loggy.info(
             f"Store white list loaded successfully: {list(_STORE_WHITE_LIST_MAP.keys())}"
         )
 
     except ImportError as error:
-        logger.error(f"Failed to import required models for white list: {error}")
+        loggy.error(f"Failed to import required models for white list: {error}")
         raise
     except Exception as error:
-        logger.error(f"Unexpected error loading store white list: {error}")
+        loggy.error(f"Unexpected error loading store white list: {error}")
         raise
 
 
@@ -841,23 +870,23 @@ def _is_store_dir(dir_path: Path) -> bool:
     Raises:
         `ValueError`: If `dir_path` is not a `Path` instance.
     """
-    logger = _get_logger()
-    logger.debug(f"Checking if directory is valid store: {dir_path}")
+    loggy = _get_loggy()
+    loggy.debug(f"Checking if directory is valid store: {dir_path}")
 
     # Input type validation
     if not isinstance(dir_path, Path):
-        error = ExpectedVarType(var_name="dir_path", got=type(dir_path), expected=Path)
-        logger.error(**error.to_log())
-        raise error
+        raise loggy.ExpectedVarType(
+            var_name="dir_path", got=type(dir_path), expected=Path
+        )
 
     # If not in white-list -> False
     if dir_path.name not in _STORE_WHITE_LIST_MAP:
-        logger.debug(f"Directory {dir_path.name} not in whitelist")
+        loggy.debug(f"Directory {dir_path.name} not in whitelist")
         return False
 
     # If directory doesn't exist or not a directory -> False
     if not dir_path.exists() or not dir_path.is_dir():
-        logger.debug(f"Directory {dir_path} does not exist or is not a directory")
+        loggy.debug(f"Directory {dir_path} does not exist or is not a directory")
         return False
 
     # Directory contents
@@ -865,53 +894,51 @@ def _is_store_dir(dir_path: Path) -> bool:
 
     # If empty directory -> False
     if len(dir_contents) == 0:
-        logger.debug(f"Directory {dir_path} is empty")
+        loggy.debug(f"Directory {dir_path} is empty")
         return False
 
     # If no index file -> False
     if not any(item.name == "index" for item in dir_contents):
-        logger.debug(f"Directory {dir_path} does not contain index file")
+        loggy.debug(f"Directory {dir_path} does not contain index file")
         return False
 
     # Assume true
-    logger.debug(f"Directory {dir_path} is a valid store directory")
+    loggy.debug(f"Directory {dir_path} is a valid store directory")
     return True
 
 
 def _setup_store_map():
-    logger = _get_logger()
-    logger.debug("Setting up store map")
+    loggy = _get_loggy()
+    loggy.debug("Setting up store map")
 
     global _STORE_MAP
 
     # Issue with missing path
     if not _PATH_SETUP_DONE or _STORES_DIR is None:
-        error = SetupError(
+        raise loggy.SetupError(
             cause="Paths not initialized",
             path=_STORES_DIR,
             path_setup_flag=_PATH_SETUP_DONE,
         )
-        logger.error(**error.to_log())
-        raise error
 
     # Only setup once
     if len(_STORE_MAP) != 0:
-        logger.debug(f"Store map already setup with {len(_STORE_MAP)} stores")
+        loggy.debug(f"Store map already setup with {len(_STORE_MAP)} stores")
         return
 
-    logger.debug(f"Scanning stores directory: {_STORES_DIR}")
+    loggy.debug(f"Scanning stores directory: {_STORES_DIR}")
     store_path: Path | None = None
     try:
         # Get list of stores
         for store_path in _STORES_DIR.iterdir():
-            logger.debug(f"Processing store path: {store_path}")
+            loggy.debug(f"Processing store path: {store_path}")
 
             # Is it a store directory -> setup
             if _is_store_dir(store_path):
                 # Get model type, name and then store
                 model_name = store_path.name
                 model_type = _STORE_WHITE_LIST_MAP[model_name]
-                logger.debug(f"Setting up store for model type: {model_name}")
+                loggy.debug(f"Setting up store for model type: {model_name}")
 
                 model_store = ModelFileStore[model_type](
                     root_dir=store_path, model_type=model_type
@@ -919,50 +946,50 @@ def _setup_store_map():
 
                 # Add model store to map
                 _STORE_MAP[model_store.name] = model_store
-                logger.info(f"Successfully loaded existing store for {model_name}")
+                loggy.info(f"Successfully loaded existing store for {model_name}")
 
             # If not a store, remove
             # Is directory -> delete contents and remove
             elif store_path.is_dir():
-                logger.warning(f"Removing invalid store directory: {store_path}")
+                loggy.warning(f"Removing invalid store directory: {store_path}")
                 shutil.rmtree(store_path)
                 store_path.rmdir()
 
             # Is file -> delete
             else:
-                logger.warning(f"Removing invalid store file: {store_path}")
+                loggy.warning(f"Removing invalid store file: {store_path}")
                 store_path.unlink()
     except Exception as error:
-        outer_error = SetupError(
+        raise loggy.SetupError(
             cause="Error occurred while setting up store map",
             current_path=store_path,
             path=_STORES_DIR,
+            caused_by=error,
         )
-        logger.error(**outer_error.to_log(), exc_info=True)
-        raise outer_error from error
 
     # Ensure all white-listed model types have a store
-    logger.debug("Ensuring all whitelisted model types have stores")
+    loggy.debug("Ensuring all whitelisted model types have stores")
     model_name: str | None = None
     model_type: type[RecordableModel] | None = None
     try:
         for model_name, model_type in _STORE_WHITE_LIST_MAP.items():
             if model_name not in _STORE_MAP:
-                logger.debug(f"Creating new store for model type: {model_name}")
+                loggy.debug(f"Creating new store for model type: {model_name}")
                 store_path = _STORES_DIR / model_name
                 model_store = ModelFileStore[model_type](
                     root_dir=store_path, model_type=model_type
                 )
                 _STORE_MAP[model_store.name] = model_store
-                logger.info(f"Successfully created new store for {model_name}")
+                loggy.info(f"Successfully created new store for {model_name}")
     except Exception as error:
-        outer_error = SetupError(
+        raise loggy.SetupError(
             cause=f"Error occurred while creating new store for {model_name} ({model_type})",
+            current_path=store_path,
+            path=_STORES_DIR,
+            caused_by=error,
         )
-        logger.error(**outer_error.to_log(), exc_info=True)
-        raise outer_error from error
 
-    logger.info(
+    loggy.info(
         f"Store map setup completed with {len(_STORE_MAP)} stores: {list(_STORE_MAP.keys())}"
     )
 
@@ -975,30 +1002,28 @@ def setup_store():
     Raises:
         RuntimeError: If paths have not been initialized via setup_paths().
     """
-    logger = _get_logger()
-    logger.debug("Starting store setup")
+    loggy = _get_loggy()
+    loggy.debug("Starting store setup")
 
     # Check if paths are initialized
     if _ASTRO_DIR is None:
-        error = SetupError(
+        loggy.warning("Paths not initialized. Call astro.paths.setup_paths() first.")
+        raise loggy.SetupError(
             cause="Paths not initialized",
             path=_ASTRO_DIR,
             path_setup_flag=_PATH_SETUP_DONE,
         )
-        logger.warning("Paths not initialized. Call astro.paths.setup_paths() first.")
-        logger.error(**error.to_log())
-        raise error
 
     # Load white list
-    logger.debug("Loading store white list")
+    loggy.debug("Loading store white list")
     _load_store_white_list()
 
     # Load store map
-    # CAUTION - B - Deletes non-white listed model stores
-    logger.debug("Setting up store map")
+    # IMPORTANT - Deletes non-white listed model stores
+    loggy.debug("Setting up store map")
     _setup_store_map()
 
-    logger.info(f"Store setup completed. Available stores: {list(_STORE_MAP.keys())}")
+    loggy.info(f"Store setup completed. Available stores: {list(_STORE_MAP.keys())}")
 
 
 def get_model_file_store(model_type: type[RecordableModel]) -> ModelFileStore:
@@ -1017,91 +1042,86 @@ def get_model_file_store(model_type: type[RecordableModel]) -> ModelFileStore:
     Raises:
         `ValueError`: If `model_type` is not a subclass of `TraceableModel`.
     """
-    logger = _get_logger()
-    logger.debug(
+    loggy = _get_loggy()
+    loggy.debug(
         f"Getting model file store for type: {model_type.__name__ if hasattr(model_type, '__name__') else model_type}"
     )
 
     # Input type validation
     if not isinstance(model_type, type) or not issubclass(model_type, RecordableModel):
-        error = ExpectedVarType(
+        raise loggy.ExpectedVarType(
             var_name="model_type",
             got=model_type,
             expected=RecordableModel,
         )
-        logger.error(**error.to_log())
-        raise error
 
     # Extract name
     model_name = model_type.__name__
-    logger.debug(f"Looking for store for model: {model_name}")
+    loggy.debug(f"Looking for store for model: {model_name}")
 
     # Entry not found in store map
     # Brian - Might be redundant double check
     if model_name not in _STORE_WHITE_LIST_MAP or model_name not in _STORE_MAP:
-        error = NoEntryKeyError(
-            key_value=model_name, sources=("whitelist", "store map")
+        raise loggy.NoEntryError(
+            key_value=model_name,
+            source=["store map", "store whitelist"],
+            in_whitelist=model_name in _STORE_WHITE_LIST_MAP,
+            in_store_map=model_name in _STORE_MAP,
         )
-        logger.error(**error.to_log())
-        raise error
-
     # Return corresponding model file store
-    logger.debug(f"Successfully retrieved store for model: {model_name}")
+    loggy.debug(f"Successfully retrieved store for model: {model_name}")
     return _STORE_MAP[model_name]
 
 
-def save_model_file_to_store(model_file: RecordableModel):
-    logger = _get_logger()
-    logger.debug(
-        f"Attempting to save model {model_file.uid} of type {type(model_file).__name__}"
-    )
+def save_model_to_store(model: RecordableModel):
+    loggy = _get_loggy()
+    loggy.debug(f"Attempting to save model {model.uid} of type {type(model).__name__}")
 
     # Extract input type
-    model_type = type(model_file)
+    model_type = type(model)
 
     # Input type validation
-    if not isinstance(model_file, RecordableModel):
-        error = ExpectedVarType(
-            var_name="model_file", got=type(model_file), expected=RecordableModel
+    if not isinstance(model, RecordableModel):
+        raise loggy.ExpectedVarType(
+            var_name="model_file", got=type(model), expected=RecordableModel
         )
-        logger.error(**error.to_log())
-        raise error
 
     # Not a valid model file to store
     if model_type.__name__ not in _STORE_WHITE_LIST_MAP:
-        error = NoEntryKeyError(key_value=model_type.__name__, sources="whitelist")
-        logger.error(**error.to_log())
-        raise error
+        raise loggy.NoEntryError(
+            key_value=model_type.__name__, source="store whitelist"
+        )
+
+    model_store: ModelFileStore | None = None
 
     try:
         # Get model file store
         model_store = get_model_file_store(model_type)
 
         # Add new model to store
-        model_store.add_model(model_file)
-        logger.info(
-            f"Successfully saved model {model_file.uid} to {model_type.__name__} store"
+        model_store.add_model(model)
+        loggy.info(
+            f"Successfully saved model {model.uid} to {model_type.__name__} store"
         )
 
     # Error occurred while trying to load file store and save model
     except Exception as error:
-        outer_error = SaveError(
-            path_or_uid=model_file.uid,
-            obj_to_save=model_file,
-            save_to="model file store",
+        raise loggy.ModelFileStoreError(
+            operation="save",
+            reason="see error that caused this",
+            stores=model_store,
+            model_or_uid=model,
+            caused_by=error,
         )
-        logger.error(**outer_error.to_log(), exc_info=True)
-        raise outer_error from error
 
 
-def load_model_file_from_store(key: str) -> RecordableModel:
-    logger = _get_logger()
-    logger.debug(f"Attempting to load model with key: {key}")
+def load_model_from_store(key: str) -> RecordableModel:
+    loggy = _get_loggy()
+    loggy.debug(f"Attempting to load model with key: {key}")
 
     # Input type validation
     if not isinstance(key, str):
-        error = KeyStrError(got=type(key))
-        logger.error(**error.to_log())
+        raise loggy.KeyStrError(got=type(key))
 
     # Check stores for entry
     matches: list[ModelFileStore] = []
@@ -1112,57 +1132,57 @@ def load_model_file_from_store(key: str) -> RecordableModel:
 
     # No matches
     if len(matches) == 0:
-        error = NoEntryKeyError(key_value=key, sources="model file stores")
+        raise loggy.NoEntryError(key_value=key, sources="store map")
 
     # Contains duplicates -> UID matching problem
     if len(matches) > 1:
-        matches_str = _options_to_str([store.name for store in matches])
-        logger.error(f"Duplicate UID {key} found in stores: {matches_str}")
-        raise ValueError(
-            f"Duplicate UID `{key}` found in multiple stores: {matches_str}"
+        raise loggy.ModelFileStoreError(
+            operation="load",
+            reason="duplicate UID found in multiple stores",
+            stores=matches,
+            model_or_uid=key,
         )
 
     # Get store
     model_store = matches[0]
-    logger.debug(f"Found model {key} in store: {model_store.name}")
+    loggy.debug(f"Found model {key} in store: {model_store.name}")
 
     try:
         # Return model from model store
         model = model_store.get_model(key)
-        logger.info(f"Successfully loaded model {key} from {model_store.name} store")
+        loggy.info(f"Successfully loaded model {key} from {model_store.name} store")
         return model
     except Exception as error:
-        logger.error(
-            f"Failed to load model {key} from store {model_store.name}: {error}"
+        raise loggy.ModelFileStoreError(
+            operation="load",
+            reason="see error that caused this",
+            stores=model_store,
+            model_or_uid=key,
+            caused_by=error,
         )
-        raise RuntimeError(
-            f"Error occurred while loading model {key} from store `{model_store.name}`"
-        ) from error
 
 
-def remove_model_file_from_store(*keys: str):
-    """Remove model files from their respective stores by UID.
+def remove_models_from_store(*keys: str, missing_okay: bool = False):
+    """Remove models from their respective stores by UID.
 
     Args:
-        *keys: One or more string UIDs of models to remove from stores.
+        `*keys` (`str`): One or more string UIDs of models to remove from stores.
+        `missing_okay` (`bool`, optional): If True, do not raise an error if a key is not found. Defaults to False.
 
     Raises:
-        ValueError: If any key is not a string.
-        KeyError: If any key is not found in any store.
-        RuntimeError: If an error occurs while removing models from stores.
+        # TODO - Define possible exceptions
     """
-    logger = _get_logger()
-    logger.debug(f"Attempting to remove models with keys: {keys}")
+    loggy = _get_loggy()
+    loggy.debug(f"Attempting to remove models with keys: {keys}")
 
     # Input type validation for all keys
     for key in keys:
         if not isinstance(key, str):
-            logger.error(f"Invalid key type: {type(key)} for key: {key}")
-            raise _expected_key_str_value_error(got=type(key))
+            raise loggy.KeyStrError(got=type(key))
 
     # Process each key
     for key in keys:
-        logger.debug(f"Processing removal of key: {key}")
+        loggy.debug(f"Processing removal of key: {key}")
 
         # Check stores for entry
         matches: list[ModelFileStore] = []
@@ -1173,82 +1193,99 @@ def remove_model_file_from_store(*keys: str):
 
         # No matches
         if len(matches) == 0:
-            logger.warning(f"Model with key {key} not found for removal")
-            raise _no_entry_key_error(key_value=key)
+            loggy.warning(f"Model with key {key} not found for removal")
+            if not missing_okay:
+                raise loggy.NoEntryError(key_value=key, sources="store map")
+            else:
+                continue
 
         # Contains duplicates -> UID matching problem
         if len(matches) > 1:
-            matches_str = options_to_str([store.name for store in matches])
-            logger.error(f"Duplicate UID {key} found in stores: {matches_str}")
-            raise ValueError(
-                f"Duplicate UID `{key}` found in multiple stores: {matches_str}"
+            raise loggy.ModelFileStoreError(
+                operation="load",
+                reason="duplicate UID found in multiple stores",
+                stores=matches,
+                model_or_uid=key,
             )
 
         # Get store and remove model
         model_store = matches[0]
         try:
             model_store.remove_model(key)
-            logger.info(
+            loggy.info(
                 f"Successfully removed model {key} from {model_store.name} store"
             )
         except Exception as error:
-            logger.error(
-                f"Failed to remove model {key} from store {model_store.name}: {error}"
+            raise loggy.ModelFileStoreError(
+                operation="remove",
+                reason="see error that caused this",
+                stores=model_store,
+                model_or_uid=key,
+                caused_by=error,
             )
-            raise RuntimeError(
-                f"Error occurred while removing model {key} from store `{model_store.name}`"
-            ) from error
 
 
 def clear_model_file_store(*model_types: type[RecordableModel]):
     """Clear all entries from the specified model file stores.
 
     Args:
-        *model_types: One or more TraceableModel types whose stores should be cleared.
+        `*model_types` (type[RecordableModel]`): One or more TraceableModel types whose stores should be cleared.
 
     Raises:
         ValueError: If any model_type is not a subclass of TraceableModel.
         KeyError: If any model_type is not found in the store whitelist.
         RuntimeError: If an error occurs while clearing stores.
     """
-    logger = _get_logger()
-    model_names = [model_type.__name__ for model_type in model_types]
-    logger.debug(f"Attempting to clear stores for model types: {model_names}")
+    loggy = _get_loggy()
+    loggy.debug(
+        "Attempting to clear stores for model types: "
+        + _options_to_str([model_type.__name__ for model_type in model_types])
+    )
 
     # Input type validation for all model types
-    for model_type in model_types:
+    for i, model_type in enumerate(model_types):
         if not isinstance(model_type, type) or not issubclass(
             model_type, RecordableModel
         ):
-            logger.error(f"Invalid model type: {model_type}")
-            raise _expected_got_var_value_error(
-                var_name="model_type", got=model_type, expected=type[RecordableModel]
+            raise loggy.ExpectedElementTypeError(
+                collection_var_name="model_types",
+                got=type(model_type),
+                expected=type[RecordableModel],
+                index_or_key=i,
             )
 
     # Process each model type
     for model_type in model_types:
         # Extract name
         model_name = model_type.__name__
-        logger.debug(f"Processing clear for model type: {model_name}")
+        loggy.debug(f"Processing clear for model type: {model_name}")
 
         # Entry not found in store map
         if model_name not in _STORE_WHITE_LIST_MAP or model_name not in _STORE_MAP:
-            logger.error(f"Model type {model_name} not found in store whitelist or map")
-            raise _no_entry_key_error(key_value=model_name)
+            raise loggy.NoEntryError(
+                key_value=model_name,
+                source=["store map", "store whitelist"],
+                in_whitelist=model_name in _STORE_WHITE_LIST_MAP,
+                in_store_map=model_name in _STORE_MAP,
+            )
 
         # Get the store and clear it
+        model_store = None
         try:
             model_store = _STORE_MAP[model_name]
             items_count = len(model_store)
             model_store.clear()
-            logger.info(
+            loggy.info(
                 f"Successfully cleared {items_count} items from {model_name} store"
             )
         except Exception as error:
-            logger.error(f"Failed to clear store for {model_name}: {error}")
-            raise RuntimeError(
-                f"Error occurred while clearing store for `{model_name}` type"
-            ) from error
+            raise loggy.ModelFileStoreError(
+                operation="clear",
+                reason="see error that caused this",
+                stores=model_store,
+                model_or_uid=model_type,
+                caused_by=error,
+            )
 
 
 # Run when loading module
@@ -1273,9 +1310,9 @@ if __name__ == "__main__":
 
     # Test logger functionality
     print("\n=== Logger Test ===")
-    logger = _get_logger()
-    logger.info("Testing logger functionality from paths.py")
-    print(f"Logger created: {logger.name}")
+    loggy = _get_loggy()
+    loggy.info("Testing logger functionality from paths.py")
+    print(f"Logger created: {loggy}")
 
     # Test store functionality (if LLMConfig is available)
     print("\n=== Store Test ===")
@@ -1287,11 +1324,11 @@ if __name__ == "__main__":
     print(f"Created test LLMConfig: {test_config.uid}")
 
     # Save to store
-    save_model_file_to_store(test_config)
+    save_model_to_store(test_config)
     print("Saved LLMConfig to store")
 
     # Load from store
-    loaded_config = load_model_file_from_store(test_config.uid)
+    loaded_config = load_model_from_store(test_config.uid)
     print(f"Loaded LLMConfig from store: {loaded_config.uid}")
     print(f"Model names match: {test_config.model_name == type_name(loaded_config)}")
 

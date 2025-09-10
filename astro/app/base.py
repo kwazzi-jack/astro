@@ -10,11 +10,11 @@ from streamlit.web import cli as stcli
 from astro.agents.chat import AstroChatAgent
 from astro.app.config import DisplayTheme, StreamlitConfig
 from astro.llms.base import ModelName, ModelProvider
-from astro.loggings.base import LogLevel, get_logger
+from astro.loggings.base import LogLevel, get_loggy
 from astro.paths import get_module_dir
 
 # Load logger
-_logger = get_logger(__file__)
+_logger = get_loggy(__file__)
 
 
 def run_streamlit_app():

@@ -1,6 +1,6 @@
-from astro.loggings.base import LogLevel, get_logger
+from astro.loggings.base import LogLevel, get_loggy
 
 __all__ = [
-    "get_logger",
+    "get_loggy",
     "LogLevel",
 ]

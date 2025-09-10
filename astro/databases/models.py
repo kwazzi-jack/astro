@@ -4,12 +4,12 @@ from sqlmodel import Field, SQLModel
 
 from astro.errors import RecordableIdentityError
 from astro.llms.base import LLMConfig
-from astro.loggings import get_logger
+from astro.loggings import get_loggy
 from astro.typings import ImmutableRecord, ModelName, ModelProvider, RecordConverter
 from astro.utilities.timing import get_datetime_now
 
 # Global variables
-_logger = get_logger(__file__)
+_logger = get_loggy(__file__)
 
 
 # Brian - Not recommended to store API-key -> Will be loaded when llm-model is created
