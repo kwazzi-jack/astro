@@ -175,6 +175,7 @@ cython_debug/
 
 # VSCode file
 .vscode/
+AGENTS.md
 
 # Other
 trash/
