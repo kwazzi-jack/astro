@@ -120,7 +120,7 @@ addopts = [
 ]
 markers = [
     "unit: Unit tests",
-    "integration: Integration tests", 
+    "integration: Integration tests",
     "slow: Slow running tests",
     "filesystem: Tests that interact with the filesystem"
 ]
