@@ -8,10 +8,10 @@ from astro.typings import (
     PathDict,
     RecordableModel,
     RecordableModelType,
-    _options_to_str,
     _path_dict_to_str_dict,
     _str_dict_to_path_dict,
-    type_name,
+    _type_name,
+    options_to_str,
 )
 
 # Global logger variable
@@ -266,7 +266,7 @@ class ModelFileStore(Generic[RecordableModelType]):
         if not (
             isinstance(model_type, type) and issubclass(model_type, RecordableModel)
         ):
-            raise loggy.ExpectedVarType(
+            raise loggy.ExpectedVariableType(
                 var_name="model_type",
                 got=model_type,
                 expected=RecordableModel,
@@ -391,11 +391,11 @@ class ModelFileStore(Generic[RecordableModelType]):
             `IOError`: If an error occurs while saving the object to disk.
         """
         loggy = _get_loggy()
-        loggy.debug(f"Saving object of type {type_name(obj)} with UID: {obj.uid}")
+        loggy.debug(f"Saving object of type {_type_name(obj)} with UID: {obj.uid}")
 
         # Input type validation
         if not isinstance(obj, self.model_type):
-            raise loggy.ExpectedVarType(
+            raise loggy.ExpectedVariableType(
                 var_name="obj",
                 got=type(obj),
                 expected=self.model_type,
@@ -413,7 +413,7 @@ class ModelFileStore(Generic[RecordableModelType]):
             # An error occurred - propagate up
             raise loggy.SaveError(
                 path_or_uid=obj.uid,
-                obj_to_save=type_name(obj),
+                obj_to_save=_type_name(obj),
                 save_to="model file",
                 caused_by=error,
             )
@@ -578,7 +578,7 @@ class ModelFileStore(Generic[RecordableModelType]):
 
         # Input type validation
         if not isinstance(key_or_obj, (str, self.model_type)):
-            raise loggy.ExpectedVarType(
+            raise loggy.ExpectedVariableType(
                 var_name="key_or_obj",
                 got=type(key_or_obj),
                 expected=(str, self.model_type),
@@ -634,7 +634,7 @@ class ModelFileStore(Generic[RecordableModelType]):
 
         # Input type validation
         if not isinstance(obj, self.model_type):
-            raise loggy.ExpectedVarType(
+            raise loggy.ExpectedVariableType(
                 var_name="obj", got=type(obj), expected=self.model_type
             )
 
@@ -665,7 +665,7 @@ class ModelFileStore(Generic[RecordableModelType]):
 
         # Input type validation
         if not isinstance(key_or_obj, (str, self.model_type)):
-            raise loggy.ExpectedVarType(
+            raise loggy.ExpectedVariableType(
                 var_name="key_or_obj",
                 got=type(key_or_obj),
                 expected=(str, self.model_type),
@@ -875,7 +875,7 @@ def _is_store_dir(dir_path: Path) -> bool:
 
     # Input type validation
     if not isinstance(dir_path, Path):
-        raise loggy.ExpectedVarType(
+        raise loggy.ExpectedVariableType(
             var_name="dir_path", got=type(dir_path), expected=Path
         )
 
@@ -1049,7 +1049,7 @@ def get_model_file_store(model_type: type[RecordableModel]) -> ModelFileStore:
 
     # Input type validation
     if not isinstance(model_type, type) or not issubclass(model_type, RecordableModel):
-        raise loggy.ExpectedVarType(
+        raise loggy.ExpectedVariableType(
             var_name="model_type",
             got=model_type,
             expected=RecordableModel,
@@ -1082,7 +1082,7 @@ def save_model_to_store(model: RecordableModel):
 
     # Input type validation
     if not isinstance(model, RecordableModel):
-        raise loggy.ExpectedVarType(
+        raise loggy.ExpectedVariableType(
             var_name="model_file", got=type(model), expected=RecordableModel
         )
 
@@ -1239,7 +1239,7 @@ def clear_model_file_store(*model_types: type[RecordableModel]):
     loggy = _get_loggy()
     loggy.debug(
         "Attempting to clear stores for model types: "
-        + _options_to_str([model_type.__name__ for model_type in model_types])
+        + options_to_str([model_type.__name__ for model_type in model_types])
     )
 
     # Input type validation for all model types
@@ -1330,7 +1330,7 @@ if __name__ == "__main__":
     # Load from store
     loaded_config = load_model_from_store(test_config.uid)
     print(f"Loaded LLMConfig from store: {loaded_config.uid}")
-    print(f"Model names match: {test_config.model_name == type_name(loaded_config)}")
+    print(f"Model names match: {test_config.model_name == _type_name(loaded_config)}")
 
     # Test store clearing
     print(f"Store length before clear: {len(get_model_file_store(LLMConfig))}")

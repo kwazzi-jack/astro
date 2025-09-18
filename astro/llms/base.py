@@ -33,10 +33,43 @@ from pydantic import (
     BaseModel,
 )
 
-from astro.typings import ModelName, ModelProvider, RecordableModel
+from astro.loggings import get_loggy
+from astro.typings import (
+    ModelName,
+    ModelProvider,
+    RecordableModel,
+    _available_provider_model_options,
+    _count_pydantic_fields,
+    _model_name_options,
+    _model_provider_options,
+    _type_name,
+)
 from astro.utilities.security import get_secret_key
 
+# --- GLOBALS ---
+loggy = get_loggy(__file__)
 ChatModel: TypeAlias = ChatAnthropic | ChatOllama | ChatOpenAI
+
+
+def available_model_providers() -> list[str]:
+    """Get a list of all supported model providers."""
+    return ModelProvider.available()
+
+
+def available_model_names() -> list[str]:
+    """Get a list of all supported model names."""
+    return ModelName.available()
+
+
+def _available_models_message(
+    recommendations: dict[str, ModelName] | None = None,
+) -> str:
+    message = ""
+    if recommendations is not None:
+        message += "Available providers with recommendations: "
+        message += f"{_model_provider_options(recommendations)}\n"
+    message += f"Available models: {_model_name_options()}"
+    return message
 
 
 class LLMConfig(RecordableModel, frozen=True):
@@ -67,54 +100,73 @@ class LLMConfig(RecordableModel, frozen=True):
         recommendations: dict[str, ModelName] | None,
     ) -> ModelName:
         """Parse the identifier and determine model name directly or via provider through recommendations"""
+        loggy.debug(f"Handling identifier-only: {identifier}")
 
         # Handle direct ModelName
         if isinstance(identifier, ModelName):
+            loggy.debug(f"Identifier is a ModelName: {identifier}")
             return identifier
 
         # Handle string identifiers
         if isinstance(identifier, str):
+            loggy.debug(f"Identifier is a string: '{identifier}'")
             # Check if it's a valid model name first
             if ModelName.supports(identifier):
+                loggy.debug("Identifier is a supported model name.")
                 return ModelName(identifier)
 
             # Check if it's in recommendations
             if recommendations and identifier in recommendations:
+                loggy.debug("Identifier found in recommendations for provider.")
                 return recommendations[identifier]
 
             # Check if it's a valid provider
             if ModelProvider.supports(identifier):
+                loggy.debug("Identifier is a supported provider.")
                 if recommendations is None:
-                    raise ValueError(
-                        f"No recommendations for any providers. "
-                        f"Please specify a model name directly: {ModelName.available()}"
+                    raise loggy.ValueError(
+                        "No recommendations for any providers. "
+                        f"Please specify a model name directly: {_model_name_options()}",
+                        identifier=identifier,
                     )
                 elif identifier not in recommendations:
-                    error_msg = f"No recommendation for provider `{identifier}`.\n"
-                    error_msg += f"Available providers with recommendations: {ModelProvider.available(*recommendations.keys())}\n"
-                    error_msg += f"Available models: {ModelName.available()}"
-                    raise ValueError(error_msg)
-
+                    error_msg = f"No recommendation for provider {identifier}.\n"
+                    error_msg += _available_models_message(recommendations)
+                    raise loggy.ValueError(
+                        error_msg,
+                        identifier=identifier,
+                        recommendations=recommendations,
+                    )
                 return recommendations[identifier]
 
             # Invalid string
-            raise ValueError(f"'{identifier}' is not a valid model or provider")
+            raise loggy.SupportError(
+                feature=identifier,
+                reason="Not a valid model or provider",
+                identifier=identifier,
+            )
 
         # Handle ModelProvider
         if isinstance(identifier, ModelProvider):
+            loggy.debug(f"Identifier is a ModelProvider: {identifier}")
             if recommendations is None:
-                raise ValueError(
-                    f"No recommendations for any providers. "
-                    f"Please specify a model name directly: {ModelName.available()}"
+                raise loggy.ValueError(
+                    "No recommendations for any providers. "
+                    f"Please specify a model name directly: {_model_name_options()}",
+                    identifier=identifier,
                 )
             elif identifier not in recommendations:
-                error_msg = f"No recommendation for provider `{identifier}`.\n"
-                error_msg += f"Available providers with recommendations: {ModelProvider.available(*recommendations.keys())}\n"
-                error_msg += f"Available models: {ModelName.available()}"
-                raise ValueError(error_msg)
+                error_msg = f"No recommendation for provider {identifier}.\n"
+                raise loggy.ValueError(
+                    error_msg,
+                    identifier=identifier,
+                    recommendations=recommendations,
+                )
             return recommendations[identifier.value]
 
-        raise ValueError(f"Unsupported identifier type: {type(identifier)}")
+        raise loggy.SupportError(
+            feature=identifier, reason=f"Unsupported identifier type {type(identifier)}"
+        )
 
     @classmethod
     def _handle_identifier_provider(
@@ -124,83 +176,99 @@ class LLMConfig(RecordableModel, frozen=True):
         Parse the identifier and provider and determine corresponding model name.
 
         Args:
-            identifier: Model identifier (string model name or ModelName enum)
-            provider: Provider identifier (string provider name or ModelProvider enum)
+            identifier (str | ModelName): Model identifier (string model name or ModelName enum)
+            provider (str | ModelProvider): Provider identifier (string provider name or ModelProvider enum)
 
         Returns:
-            Validated ModelName that matches the specified provider
+            ModelName: Validated ModelName that matches the specified provider
 
         Raises:
             ValueError: If validation fails or model/provider don't match
         """
+        loggy.debug(f"Handling identifier '{identifier}' with provider '{provider}'")
         # Step 1: Validate and parse the model identifier
         if isinstance(identifier, str):
+            loggy.debug("Identifier is a string, validating...")
             # Check if string is actually a provider name (common mistake)
             if ModelProvider.supports(identifier):
-                raise ValueError(
-                    f"Expected a model name but received provider name: `{identifier}`. "
-                    f"Please specify a model name: {ModelName.available()}"
+                got_provider = ModelProvider(identifier)
+                got_models_str = _available_provider_model_options(got_provider)
+                raise loggy.ValueError(
+                    "Parsing model name with provider failed since "
+                    f"identifier is model provider: '{identifier}'. ",
+                    warning=(
+                        "When using both identifier and provider arguments, "
+                        "that identifier expects a string or ModelName. "
+                        "Either omit the provider argument for automatic "
+                        "selection, or choose identifier as a correct "
+                        f"model name for '{got_provider.value}': {got_models_str}"
+                    ),
                 )
 
             # Check if the model name is supported
             if not ModelName.supports(identifier):
-                raise ValueError(
-                    f"Model `{identifier}` is not supported by Astro. "
-                    f"Please specify a model name: {ModelName.available()}"
+                raise loggy.ValueError(
+                    f"Model '{identifier}' is not supported by Astro. "
+                    f"Please specify a model name: {_model_name_options()}"
                 )
 
             model_name = ModelName(identifier)
+            loggy.debug(f"Identifier string parsed to ModelName: {model_name}")
 
         elif isinstance(identifier, ModelName):
             model_name = identifier
+            loggy.debug(f"Identifier is already a ModelName: {model_name}")
 
         else:
-            raise ValueError(
-                f"Invalid identifier type: `{type(identifier).__name__}`. "
-                f"Expected `str` or `ModelName`"
+            raise loggy.ExpectedVariableType(
+                var_name="identifier", got=type(identifier), expected=(str, ModelName)
             )
 
         # Step 2: Validate and parse the provider
         if isinstance(provider, str):
+            loggy.debug("Provider is a string, validating...")
             # Check if string is actually a model name (common mistake)
             if ModelName.supports(provider):
-                raise ValueError(
-                    f"Expected a provider name but received model name: `{provider}`. "
-                    f"Please specify a provider name or omit for automatic inference.\n"
-                    f"Supported providers: {ModelProvider.available()}"
+                raise loggy.ExpectedTypeError(
+                    var_name="provider",
+                    got=type(provider),
+                    expected=(str, ModelProvider),
+                    warning="Please specify a provider name or omit for automatic inference.",
                 )
 
             # Check if the provider name is supported
             if not ModelProvider.supports(provider):
-                raise ValueError(
-                    f"Provider `{provider}` is not supported by Astro. "
+                raise loggy.ValueError(
+                    f"Provider {provider} is not supported by Astro. "
                     f"Supported providers: {ModelProvider.available()}"
                 )
 
             model_provider = ModelProvider(provider)
+            loggy.debug(f"Provider string parsed to ModelProvider: {model_provider}")
 
         elif isinstance(provider, ModelProvider):
             model_provider = provider
+            loggy.debug(f"Provider is already a ModelProvider: {model_provider}")
 
         else:
-            raise ValueError(
-                f"Invalid provider type: `{type(provider).__name__}`. "
-                f"Expected `str` or `ModelProvider`"
+            raise loggy.ExpectedVariableType(
+                var_name="provider",
+                got=type(provider),
+                expected=(str, ModelProvider),
             )
 
         # Step 3: Validate that the model belongs to the specified provider
+        loggy.debug(
+            f"Validating that model {model_name} belongs to provider {model_provider}"
+        )
         if model_name.provider != model_provider:
-            error_msg = (
-                f"Model `{model_name}` belongs to provider `{model_name.provider}`, "
-                f"not `{model_provider}`. Please use a model from the correct provider:\n"
+            raise loggy.LLMError(
+                f"Model {model_name.value!r} belongs to provider {model_name.provider.value!r}, "
+                f"not {model_provider.value!r}. Please use a model from the correct provider.",
+                model_identifier=model_name,
+                model_provider=model_provider,
+                model_name_provider=model_name.provider,
             )
-            for provider in ModelProvider:
-                error_msg += (
-                    f" - `{provider}`: {', '.join(f'`{m}`' for m in provider.models)}\n"
-                )
-
-            raise ValueError(error_msg)
-
         return model_name
 
     @classmethod
@@ -211,30 +279,41 @@ class LLMConfig(RecordableModel, frozen=True):
         recommendations: dict[str, ModelName] | None = None,
     ) -> ModelName:
         """General parsing of identifier and parser to get model name"""
+        loggy.debug(
+            f"Parsing identifier {identifier!r} and provider {provider!r} with recommendations: {recommendations is not None}"
+        )
 
         if not isinstance(identifier, (str, ModelName, ModelProvider)):
-            raise ValueError(
-                f"Invalid identifier type: `{type(identifier).__name__}`. "
-                "Expected `str`, `ModelName` or `ModelProvider`"
+            raise loggy.ExpectedVariableType(
+                var_name="identifier",
+                got=type(identifier),
+                expected=(str, ModelName, ModelProvider),
             )
 
         if provider is not None and not isinstance(provider, (str, ModelProvider)):
-            raise ValueError(
-                f"Invalid provider type: `{type(provider).__name__}`. "
-                "Expected `str` or `ModelProvider`"
+            raise loggy.ExpectedVariableType(
+                var_name="provider", got=type(provider), expected=(str, ModelProvider)
             )
 
         if recommendations is not None and not isinstance(recommendations, dict):
-            raise ValueError(
-                "recommendations must be a dict mapping provider names to ModelName instances"
+            raise loggy.ExpectedVariableType(
+                var_name="recommendations", got=type(recommendations), expected=dict
             )
 
         if provider is None:
+            loggy.debug("Provider is None, handling identifier only.")
             return cls._handle_identifier_only(identifier, recommendations)
         else:
+            loggy.debug("Provider is specified, handling identifier and provider.")
             if isinstance(identifier, ModelProvider):
-                raise ValueError(
-                    "Cannot specify both ModelProvider as identifier and separate provider parameter"
+                outer_error = loggy.ExpectedVariableType(
+                    var_name="identifier",
+                    got=type(identifier),
+                    expected=(str, ModelName),
+                )
+                raise loggy.ValueError(
+                    "Cannot specify both identifier to be of type ModelProvider if provider is not None",
+                    caused_by=outer_error,
                 )
             return cls._handle_identifier_provider(identifier, provider)
 
@@ -271,23 +350,31 @@ class LLMConfig(RecordableModel, frozen=True):
         provider: str | ModelProvider | None = None,
         **overrides: Any,
     ) -> "LLMConfig":
+        loggy.debug(f"Creating conversational LLMConfig for identifier: {identifier!r}")
         # Recommended conversational models per provider
         recommendations: dict[str, ModelName] = {
             "openai": ModelName.GPT_4O_MINI,
             "anthropic": ModelName.CLAUDE_SONNET_4,
             "ollama": ModelName.LLAMA3_8B,
         }
+        debug_str = ", ".join(
+            f"{provider_str}/{model.value}"
+            for provider_str, model in recommendations.items()
+        )
+        loggy.debug(
+            f"Recommendations for conversational: {debug_str}",
+            recommendations=recommendations,
+        )
 
         # Parse and validate the identifier/provider combination
         if provider is None:
             model_name = cls._handle_identifier_only(identifier, recommendations)
         else:
-            if isinstance(identifier, ModelProvider):
-                raise ValueError(
-                    "Cannot specify both ModelProvider as identifier and separate provider parameter. "
-                    "Either pass ModelProvider as identifier only, or pass model name with provider."
-                )
             model_name = cls._handle_identifier_provider(identifier, provider)
+        loggy.debug(
+            f"Successfully validated model {model_name.value!r} for provider {model_name.provider.value!r}",
+            model_name=model_name,
+        )
 
         # Base defaults tuned for conversational usage (can be overridden)
         base_defaults: dict[str, object] = {
@@ -308,9 +395,14 @@ class LLMConfig(RecordableModel, frozen=True):
         }
 
         # Merge overrides onto defaults (overrides wins)
+        debug_str = ", "
+        loggy.debug(
+            f"Overriden fields equals {len(overrides)}", overriden_fields=overrides
+        )
         merged = {**base_defaults, **overrides}
 
         # Create LLM config with validated model and provider including defaults + overrides
+        loggy.debug("Attempting to create and return LLMConfig", merged_fields=merged)
         return cls(model_name=model_name, model_provider=model_name.provider, **merged)
 
 
@@ -356,11 +448,18 @@ def create_chat_model(llm_config: LLMConfig) -> ChatModel:
         >>> # Streaming enabled for any provider
         >>> model = create_chat_model("openai::gpt-4o-mini", streaming=True)
     """
+    loggy.debug("Creating new chat model")
     # Validate input
     if not isinstance(llm_config, LLMConfig):
-        raise ValueError(
-            f"Expected config model of type `LLMConfig`. Got `{llm_config.__class__.__name__}`"
+        raise loggy.ExpectedVariableType(
+            var_name="llm_config", got=type(llm_config), expected=LLMConfig
         )
+    loggy.debug(
+        f"Using LLMConfig {llm_config.secret_uid} "
+        f"for {llm_config.model_name.value!r} "
+        f"from {llm_config.model_provider.value!r} "
+        f"(langchain-{llm_config.model_provider.value})"
+    )
 
     # Create langchain chat model based on provider
     match llm_config.model_provider:
@@ -371,6 +470,7 @@ def create_chat_model(llm_config: LLMConfig) -> ChatModel:
                 if llm_config.reasoning
                 else None
             )
+            loggy.debug("Selected OpenAI and returning with model")
             return ChatOpenAI(
                 model=llm_config.model_name,
                 temperature=llm_config.temperature,
@@ -394,6 +494,7 @@ def create_chat_model(llm_config: LLMConfig) -> ChatModel:
                 if llm_config.reasoning
                 else None
             )
+            loggy.debug("Selected Anthropic and returning with model")
             return ChatAnthropic(
                 model=llm_config.model_name,  # pyright: ignore[reportCallIssue]
                 temperature=llm_config.temperature,
@@ -409,6 +510,7 @@ def create_chat_model(llm_config: LLMConfig) -> ChatModel:
 
         case ModelProvider.OLLAMA:
             # TODO Add warnings for settings given that do not effect ollama
+            loggy.debug("Selected Ollama and returning with model")
             return ChatOllama(
                 model=llm_config.model_name,
                 temperature=llm_config.temperature,
@@ -423,7 +525,9 @@ def create_chat_model(llm_config: LLMConfig) -> ChatModel:
                 keep_alive=llm_config.keep_alive,
             )
         case _:
-            raise ValueError(f"Unsupported chat model provider `{llm_config.provider}`")
+            raise loggy.SupportError(
+                feature=llm_config.model_provider.value, llm_config=llm_config
+            )
 
 
 def create_structured_model(
@@ -491,9 +595,34 @@ def create_structured_model(
         ...     gpu_count=1
         ... )
     """
+    loggy.info("Creating structured LLM model")
+
+    # Additional Input validation
+    if not isinstance(output_schema, type) or not issubclass(output_schema, BaseModel):
+        raise loggy.ExpectedVariableType(
+            var_name="output_schema",
+            got=type(output_schema),
+            expected=type[BaseModel],
+        )
+    if not isinstance(include_raw, bool):
+        raise loggy.ExpectedVariableType(
+            var_name="include_raw", got=type(include_raw), expected=bool
+        )
+
+    # No fields present
+    if _count_pydantic_fields(output_schema) == 0:
+        loggy.warning(
+            f"Output schema {output_schema.__name__} has "
+            "no fields to be used in structured output"
+        )
+
+    loggy.debug(f"Creating model from LLMConfig {llm_config.secret_uid!r}")
     llm = create_chat_model(llm_config)
 
     # Return chat model bound to provided output schema
+    loggy.debug(
+        f"Model created and returning with output schema {type(output_schema).__name__} ({include_raw=})"
+    )
     return llm.with_structured_output(schema=output_schema, include_raw=include_raw)
 
 
@@ -510,7 +639,10 @@ def create_conversational_model(
     Returns:
         ChatModel: Configured chat model instance optimized for conversation
     """
+    loggy.info(f"Creating conversation model with {identifier!r}")
     config = LLMConfig.for_conversational(identifier, provider=provider, **overrides)
+
+    loggy.debug("Config created. Creating model from config")
     return create_chat_model(config), config
 
 
@@ -521,11 +653,35 @@ if __name__ == "__main__":
     model_4 = LLMConfig.for_conversational("ollama")
     model_5 = LLMConfig.for_conversational("openai")
 
-    print(f"{model_1}, {hash(model_1)=}")
-    print(f"{model_2}, {hash(model_2)=}")
-    print(f"{model_3}, {hash(model_3)=}")
-    print(f"{model_4}, {hash(model_4)=}")
-    print(f"{model_5}, {hash(model_5)=}")
+    test_pairs = [
+        (None, None),  # No input
+        (None, "ollama"),  # Provider only input
+        ("gemini", None),  # Gemini only
+        ("gemini", "gemini"),  # Double gemini
+        ("ollama", "ollama"),  # Double ollama
+        ("not_a_model", None),  # Invalid model name
+        ("gpt-4o-mini", "anthropic"),  # Mismatched provider
+        (ModelName.GPT_4O_MINI, "anthropic"),  # Mismatched provider (enum)
+        ("openai", "gpt-4o-mini"),  # Swapped arguments
+        (
+            ModelProvider.OLLAMA,
+            "ollama",
+        ),  # Identifier as provider when provider is also specified
+        (123, None),  # Invalid identifier type
+        ("gpt-4o-mini", 123),  # Invalid provider type
+    ]
+
+    for identifier, provider in test_pairs:
+        try:
+            LLMConfig.for_conversational(identifier=identifier, provider=provider)
+        except Exception:
+            pass
+
+    print(f"{model_1}, {hash(model_1)=}, {model_1.secret_uid=}")
+    print(f"{model_2}, {hash(model_2)=}, {model_2.secret_uid=}")
+    print(f"{model_3}, {hash(model_3)=}, {model_3.secret_uid=}")
+    print(f"{model_4}, {hash(model_4)=}, {model_4.secret_uid=}")
+    print(f"{model_5}, {hash(model_5)=}, {model_5.secret_uid=}")
     print()
     print(f"Model 1 is Model 2? {model_1 == model_2} or {model_1 is model_2}")
     print(f"Model 1 is Model 3? {model_1 == model_3} or {model_1 is model_3}")

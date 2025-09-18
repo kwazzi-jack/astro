@@ -2,7 +2,6 @@ import json
 import math
 import shutil
 import textwrap
-from collections.abc import Callable, Sequence
 from typing import IO, Any
 
 from langchain_core.messages import BaseMessage
@@ -22,8 +21,6 @@ def md_print(
     flush: bool = False,
 ):
     rprint(Markdown(text), sep=sep, end=end, file=file, flush=flush)
-
-
 
 
 def inline_code_format(line: str) -> str:

@@ -31,7 +31,7 @@ from typing import Generic
 from sqlalchemy.exc import IntegrityError
 from sqlmodel import Session, select
 
-from astro.errors import ExpectedVarType
+from astro.errors import ExpectedVariableType
 from astro.loggings import get_loggy
 from astro.typings import (
     ImmutableRecord,
@@ -39,7 +39,7 @@ from astro.typings import (
     RecordableModel,
     RecordableModelType,
     RecordConverter,
-    type_name,
+    _type_name,
 )
 from astro.utilities.timing import get_datetime_now
 
@@ -81,7 +81,7 @@ class Store(Generic[RecordableModelType, ImmutableRecordType]):
         if not (
             isinstance(model_type, type) and issubclass(model_type, RecordableModel)
         ):
-            raise ExpectedVarType(
+            raise ExpectedVariableType(
                 var_name="model_type",
                 got=model_type,
                 expected=RecordableModel,
@@ -90,7 +90,7 @@ class Store(Generic[RecordableModelType, ImmutableRecordType]):
         if not (
             isinstance(record_type, type) and issubclass(record_type, ImmutableRecord)
         ):
-            raise ExpectedVarType(
+            raise ExpectedVariableType(
                 var_name="record_type",
                 got=record_type,
                 expected=ImmutableRecord,
@@ -101,7 +101,7 @@ class Store(Generic[RecordableModelType, ImmutableRecordType]):
             hasattr(record_type, "from_model") and hasattr(record_type, "to_model")
         ):
             raise ValueError(
-                f"Record type {type_name(record_type)} must implement `RecordConverter` protocol "
+                f"Record type {_type_name(record_type)} must implement `RecordConverter` protocol "
                 f"(`from_model` and `to_model` methods)"
             )
 
@@ -133,7 +133,7 @@ class Store(Generic[RecordableModelType, ImmutableRecordType]):
         self._shutdown_event = asyncio.Event()
         self._last_flush = get_datetime_now()
 
-        _logger.info(f"Store `{self._name}` initialized for {type_name(model_type)}")
+        _logger.info(f"Store `{self._name}` initialized for {_type_name(model_type)}")
 
     @property
     def model_type(self) -> type[RecordableModelType]:
@@ -166,7 +166,7 @@ class Store(Generic[RecordableModelType, ImmutableRecordType]):
         elif isinstance(key_or_model, self._model_type):
             key = self._get_key(key_or_model)
         else:
-            raise ExpectedVarType(
+            raise ExpectedVariableType(
                 var_name="key_or_model",
                 got=type(key_or_model),
                 expected=(str, self._model_type),
@@ -216,7 +216,7 @@ class Store(Generic[RecordableModelType, ImmutableRecordType]):
             The model object if found, otherwise default
         """
         if not isinstance(key, str):
-            raise ExpectedVarType(var_name="key", got=type(key), expected=str)
+            raise ExpectedVariableType(var_name="key", got=type(key), expected=str)
 
         with self._lock:
             return self._buffer.get(key, default)
@@ -234,7 +234,7 @@ class Store(Generic[RecordableModelType, ImmutableRecordType]):
             ValueError: If model is not the correct type
         """
         if not isinstance(model, self._model_type):
-            raise ExpectedVarType(
+            raise ExpectedVariableType(
                 var_name="model", got=type(model), expected=self._model_type
             )
 
@@ -277,7 +277,7 @@ class Store(Generic[RecordableModelType, ImmutableRecordType]):
         elif isinstance(key_or_model, self._model_type):
             key = self._get_key(key_or_model)
         else:
-            raise ExpectedVarType(
+            raise ExpectedVariableType(
                 var_name="key_or_model",
                 got=type(key_or_model),
                 expected=(str, self._model_type),

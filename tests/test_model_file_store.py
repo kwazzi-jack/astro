@@ -5,8 +5,8 @@ This module tests all functionality of the ModelFileStore class including:
 - Initialization and validation
 - CRUD operations
 - File system interactions
-- Error handling and edge cases
-- Index file management
+- Error handling cases
+- File management
 - Type safety and validation
 """
 
@@ -16,6 +16,14 @@ from unittest.mock import patch
 
 import pytest
 
+from astro.errors import (
+    ExpectedVariableType,
+    KeyStrError,
+    LoadError,
+    NoEntryError,
+    SaveError,
+    ValueTypeError,
+)
 from astro.paths import ModelFileStore
 from tests.conftest import AnotherMockModel, MockTraceableModel
 
@@ -85,15 +93,19 @@ class TestModelFileStoreInitialization:
     @pytest.mark.unit
     def test_init_invalid_model_type_raises_error(self, temp_dir: Path):
         """Test that invalid model type raises ValueError."""
-        with pytest.raises(
-            AttributeError, match="'str' object has no attribute '__name__'"
-        ):
+        with pytest.raises(ExpectedVariableType) as exc_info:
             ModelFileStore(temp_dir, dict)  # type: ignore
 
-        with pytest.raises(
-            AttributeError, match="'str' object has no attribute '__name__'"
-        ):
+        # Check that it's an ExpectedVariableType with the expected message pattern
+        assert "Expected model_type to be" in str(exc_info.value)
+        assert "RecordableModel" in str(exc_info.value)
+
+        with pytest.raises(ExpectedVariableType) as exc_info:
             ModelFileStore(temp_dir, "not_a_type")  # type: ignore
+
+        # Check that it's an ExpectedVariableType with the expected message pattern
+        assert "Expected model_type to be" in str(exc_info.value)
+        assert "RecordableModel" in str(exc_info.value)
 
     @pytest.mark.unit
     def test_properties(self, temp_dir: Path):
@@ -141,16 +153,20 @@ class TestModelFileStoreIndexOperations:
         store = ModelFileStore(temp_dir, MockTraceableModel)
 
         with patch("builtins.open", side_effect=IOError("Permission denied")):
-            with pytest.raises(
-                IOError, match="Error occurred while loading from index file"
-            ):
+            with pytest.raises(SaveError) as exc_info:
                 store._save_index()
+
+            # Check that it's a SaveError with the expected message pattern
+            assert "Error occurred while saving" in str(exc_info.value)
 
     @pytest.mark.unit
     def test_load_index_io_error(self, corrupted_temp_dir: Path):
         """Test _load_index handles corrupted files."""
-        with pytest.raises(IOError, match="Error occurred while saving to index file"):
+        with pytest.raises(LoadError) as exc_info:
             ModelFileStore(corrupted_temp_dir, MockTraceableModel)
+
+        # Check that it's a LoadError with the expected message pattern
+        assert "Error occurred while loading" in str(exc_info.value)
 
 
 class TestModelFileStoreObjectOperations:
@@ -193,16 +209,24 @@ class TestModelFileStoreObjectOperations:
         """Test _save_object rejects wrong model type."""
         store = ModelFileStore(temp_dir, MockTraceableModel)
 
-        with pytest.raises(ValueError, match="Expected `obj` to be"):
+        with pytest.raises(ExpectedVariableType) as exc_info:
             store._save_object(another_mock_model)  # type: ignore
+
+        # Check that it's an ExpectedVariableType with the expected message pattern
+        assert "Expected obj to be" in str(exc_info.value)
+        assert "MockTraceableModel" in str(exc_info.value)
 
     @pytest.mark.unit
     def test_load_object_invalid_key_type(self, temp_dir: Path):
         """Test _load_object rejects non-string keys."""
         store = ModelFileStore(temp_dir, MockTraceableModel)
 
-        with pytest.raises(ValueError, match="Expected `key` to be"):
+        with pytest.raises(KeyStrError) as exc_info:
             store._load_object(123)  # type: ignore
+
+        # Check that it's a KeyStrError with the expected message pattern
+        assert "Expected key to be" in str(exc_info.value)
+        assert "str" in str(exc_info.value)
 
     @pytest.mark.unit
     def test_save_object_io_error(self, temp_dir: Path, mock_model: MockTraceableModel):
@@ -211,8 +235,11 @@ class TestModelFileStoreObjectOperations:
         store[mock_model.uid] = temp_dir / mock_model.uid
 
         with patch("builtins.open", side_effect=IOError("Disk full")):
-            with pytest.raises(IOError, match=f"Error while saving.*{mock_model.uid}"):
+            with pytest.raises(SaveError) as exc_info:
                 store._save_object(mock_model)
+
+            # Check that it's a SaveError with the expected message pattern
+            assert "Error occurred while saving" in str(exc_info.value)
 
     @pytest.mark.unit
     def test_load_object_io_error(self, temp_dir: Path):
@@ -221,8 +248,11 @@ class TestModelFileStoreObjectOperations:
         fake_key = "nonexistent_key"
         store[fake_key] = temp_dir / "nonexistent_file"
 
-        with pytest.raises(IOError, match=f"Error while loading {fake_key}"):
+        with pytest.raises(LoadError) as exc_info:
             store._load_object(fake_key)
+
+        # Check that it's a LoadError with the expected message pattern
+        assert "Error occurred while loading" in str(exc_info.value)
 
 
 class TestModelFileStoreDictInterface:
@@ -243,18 +273,23 @@ class TestModelFileStoreDictInterface:
         """Test __getitem__ rejects non-string keys."""
         store = ModelFileStore(temp_dir, MockTraceableModel)
 
-        with pytest.raises(
-            ValueError, match="Expected `key` to be `str`. Got `int` instead"
-        ):
+        with pytest.raises(KeyStrError) as exc_info:
             _ = store[123]  # type: ignore
+
+        # Check that it's a KeyStrError with the expected message pattern
+        assert "Expected key to be" in str(exc_info.value)
+        assert "str" in str(exc_info.value)
 
     @pytest.mark.unit
     def test_getitem_missing_key(self, temp_dir: Path):
         """Test __getitem__ raises KeyError for missing keys."""
         store = ModelFileStore(temp_dir, MockTraceableModel)
 
-        with pytest.raises(KeyError, match="No entry for key"):
+        with pytest.raises(NoEntryError) as exc_info:
             _ = store["nonexistent_key"]
+
+        # Check that it's a NoEntryError with the expected message pattern
+        assert "No entry for key" in str(exc_info.value)
 
     @pytest.mark.filesystem
     def test_setitem(self, temp_dir: Path):
@@ -273,20 +308,24 @@ class TestModelFileStoreDictInterface:
         """Test __setitem__ rejects non-string keys."""
         store = ModelFileStore(temp_dir, MockTraceableModel)
 
-        with pytest.raises(
-            ValueError, match="Expected `key` to be `str`. Got `int` instead"
-        ):
+        with pytest.raises(KeyStrError) as exc_info:
             store[123] = temp_dir / "file"  # type: ignore
+
+        # Check that it's a KeyStrError with the expected message pattern
+        assert "Expected key to be" in str(exc_info.value)
+        assert "str" in str(exc_info.value)
 
     @pytest.mark.unit
     def test_setitem_invalid_value_type(self, temp_dir: Path):
         """Test __setitem__ rejects non-Path values."""
         store = ModelFileStore(temp_dir, MockTraceableModel)
 
-        with pytest.raises(
-            ValueError, match="Expected `value` to be `Path`. Got `str` instead"
-        ):
+        with pytest.raises(ValueTypeError) as exc_info:
             store["key"] = "not_a_path"  # type: ignore
+
+        # Check that it's a ValueTypeError with the expected message pattern
+        assert "Expected value to be" in str(exc_info.value)
+        assert "Path" in str(exc_info.value)
 
     @pytest.mark.filesystem
     def test_delitem(self, temp_dir: Path, mock_model: MockTraceableModel):
@@ -309,18 +348,23 @@ class TestModelFileStoreDictInterface:
         """Test __delitem__ rejects non-string keys."""
         store = ModelFileStore(temp_dir, MockTraceableModel)
 
-        with pytest.raises(
-            ValueError, match="Expected `key` to be `str`. Got `int` instead"
-        ):
+        with pytest.raises(KeyStrError) as exc_info:
             del store[123]  # type: ignore
+
+        # Check that it's a KeyStrError with the expected message pattern
+        assert "Expected key to be" in str(exc_info.value)
+        assert "str" in str(exc_info.value)
 
     @pytest.mark.unit
     def test_delitem_missing_key(self, temp_dir: Path):
         """Test __delitem__ raises KeyError for missing keys."""
         store = ModelFileStore(temp_dir, MockTraceableModel)
 
-        with pytest.raises(KeyError, match="No entry for key"):
+        with pytest.raises(NoEntryError) as exc_info:
             del store["nonexistent_key"]
+
+        # Check that it's a NoEntryError with the expected message pattern
+        assert "No entry for key" in str(exc_info.value)
 
     @pytest.mark.unit
     def test_iter(
@@ -367,8 +411,11 @@ class TestModelFileStoreDictInterface:
         """Test __contains__ rejects invalid types."""
         store = ModelFileStore(temp_dir, MockTraceableModel)
 
-        with pytest.raises(ValueError, match="Expected `key_or_obj` to be"):
+        with pytest.raises(ExpectedVariableType) as exc_info:
             _ = 123 in store  # type: ignore
+
+        # Check that it's an ExpectedVariableType with the expected message pattern
+        assert "Expected key_or_obj to be" in str(exc_info.value)
 
     @pytest.mark.unit
     def test_len(
@@ -460,11 +507,12 @@ class TestModelFileStorePublicMethods:
         """Test add() rejects wrong model type."""
         store = ModelFileStore(temp_dir, MockTraceableModel)
 
-        with pytest.raises(
-            ValueError,
-            match="Expected `value` to be `MockTraceableModel`. Got `AnotherMockModel` instead",
-        ):
+        with pytest.raises(ExpectedVariableType) as exc_info:
             store.add_model(another_mock_model)  # type: ignore
+
+        # Check that it's an ExpectedVariableType with the expected message pattern
+        assert "Expected obj to be" in str(exc_info.value)
+        assert "MockTraceableModel" in str(exc_info.value)
 
     @pytest.mark.filesystem
     def test_remove_by_key(self, temp_dir: Path, mock_model: MockTraceableModel):
@@ -499,8 +547,11 @@ class TestModelFileStorePublicMethods:
         """Test remove() rejects invalid types."""
         store = ModelFileStore(temp_dir, MockTraceableModel)
 
-        with pytest.raises(ValueError, match="Expected `key_or_obj` to be"):
+        with pytest.raises(ExpectedVariableType) as exc_info:
             store.remove_model(123)  # type: ignore
+
+        # Check that it's an ExpectedVariableType with the expected message pattern
+        assert "Expected key_or_obj to be" in str(exc_info.value)
 
     @pytest.mark.filesystem
     def test_get_model_existing(self, temp_dir: Path, mock_model: MockTraceableModel):
@@ -646,8 +697,8 @@ class TestModelFileStoreEdgeCases:
         # Make index file read-only
         store.index_file.chmod(0o444)
 
-        # Should raise IOError when trying to modify
-        with pytest.raises(IOError):
+        # Should raise SaveError when trying to modify
+        with pytest.raises(SaveError):
             store.add_model(MockTraceableModel(name="another", value=999))
 
         # Restore permissions for cleanup

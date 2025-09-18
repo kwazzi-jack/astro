@@ -9,7 +9,6 @@ from pydantic import SecretStr
 
 from astro.loggings.base import get_loggy
 from astro.paths import _BASE_SECRETS_PATH
-from astro.typings import type_name
 
 loggy = get_loggy("astro.utilities.security")
 
@@ -70,7 +69,9 @@ def get_secret_key(key: str) -> SecretStr:
 
     secret_value = secrets_dict[key]
     if not isinstance(secret_value, str):
-        raise loggy.ExpectedVarType(var_name=key, got=type(secret_value), expected=str)
+        raise loggy.ExpectedVariableType(
+            var_name=key, got=type(secret_value), expected=str
+        )
 
     return SecretStr(secret_value)
 

@@ -28,6 +28,30 @@ HashableObject: TypeAlias = "RecordableModel | ImmutableRecord"
 NamedDict: TypeAlias = dict[str, Any]
 
 
+def secretify(value: Any) -> str:
+    """Obscures the middle part of a string, showing only the ends."""
+    value_str = str(value)
+    length = len(value_str)
+
+    if length <= 8:
+        return "*" * 8
+
+    if length > 15:
+        prefix_len = 4
+        suffix_len = 4
+    else:
+        # This logic covers lengths from 9 to 15, matching the original if-chain
+        uncovered = length - 8
+        prefix_len = uncovered // 2
+        suffix_len = uncovered - prefix_len
+
+    prefix = value_str[:prefix_len]
+    suffix = value_str[length - suffix_len :]
+    num_asterisks = length - prefix_len - suffix_len
+
+    return f"{prefix}{'*' * num_asterisks}{suffix}"
+
+
 def _str_dict_to_path_dict(contents: StrDict) -> PathDict:
     try:
         return {key: Path(value).resolve() for key, value in contents.items()}
@@ -46,14 +70,14 @@ def _path_dict_to_str_dict(contents: PathDict) -> StrDict:
         ) from error
 
 
-def type_name(obj: Any) -> str:
+def _type_name(obj: Any) -> str:
     if isinstance(obj, type):
         return obj.__name__
     else:
         return type(obj).__name__
 
 
-def _options_to_str(values: Sequence[str]) -> str:
+def options_to_str(values: Sequence[str]) -> str:
     if len(values) == 0:
         return ""
     elif len(values) == 1:
@@ -62,8 +86,12 @@ def _options_to_str(values: Sequence[str]) -> str:
         return ", ".join(values[:-1]) + " or " + values[-1]
 
 
+def options_to_repr_str(values: Sequence[str]) -> str:
+    return options_to_str(list(map(repr, values)))
+
+
 def type_options(objects: Sequence[Any]) -> list[str]:
-    return list(map(type_name, objects))
+    return list(map(_type_name, objects))
 
 
 def format_object(): ...
@@ -109,14 +137,14 @@ def _path_json_encoder(path: Path) -> str:
     return str(path)
 
 
-class RecordableModel(BaseModel):
+class RecordableModel(BaseModel, frozen=True):
     """Base model for recordable objects with hashing and dictionary utilities.
 
     This class provides methods for generating hashes and converting to dictionaries,
     suitable for database storage or serialization.
 
     Attributes:
-        None (inherits from `BaseModel`; placeholder for any custom attributes).
+        None (inherits from BaseModel; placeholder for any custom attributes).
     """
 
     model_config = ConfigDict(
@@ -161,22 +189,22 @@ class RecordableModel(BaseModel):
         """Return the hash value of the model based on its stable hash.
 
         Returns:
-            `int`: The hash value computed from the stable hash.
+            int: The hash value computed from the stable hash.
         """
         return int.from_bytes(self._compute_stable_hash(), byteorder="big")
 
     # OVERRIDE: pydantic.BaseModel.__eq__
     def __eq__(self, other: Any) -> bool:
-        """Override of `BaseModel.__eq__` to compare models based on their stable hash.
+        """Override of BaseModel.__eq__ to compare models based on their stable hash.
 
         Two models are considered equal if they are of the same type and have the same hash value,
         ensuring consistent equality based on content rather than identity.
 
         Args:
-            `other` (`Any`): The object to compare with this model instance.
+            other (Any): The object to compare with this model instance.
 
         Returns:
-            `bool`: `True` if the objects are equal, `False` otherwise.
+            bool: True if the objects are equal, False otherwise.
         """
 
         # Not the same type
@@ -198,9 +226,12 @@ class RecordableModel(BaseModel):
         """Generate a base64-encoded representation of the model's stable hash.
 
         Returns:
-            `str`: Base64-encoded string of the model's `blake3` hash (44 characters).
+            str: Base64-encoded string of the model's blake3 hash (44 characters).
         """
         return base64.b64encode(self._compute_stable_hash()).decode("ascii")
+
+    def secret_uid(self) -> str:
+        return secretify(self.uid)
 
 
 class ImmutableRecord(ABC, SQLModel):
@@ -209,11 +240,11 @@ class ImmutableRecord(ABC, SQLModel):
     This class represents a persistent, immutable record with metadata for tracking access.
 
     Attributes:
-        `uid` (`int | None`): Unique identifier for the record.
-        `record_hash` (`int`): Hash value for indexing and uniqueness.
-        `created_at` (`datetime`): Timestamp when the record was created.
-        `last_accessed_at` (`datetime | None`): Timestamp of last access.
-        `access_count` (`int`): Number of times the record has been accessed.
+        uid (int | None): Unique identifier for the record.
+        record_hash (int): Hash value for indexing and uniqueness.
+        created_at (datetime): Timestamp when the record was created.
+        last_accessed_at (datetime | None): Timestamp of last access.
+        access_count (int): Number of times the record has been accessed.
     """
 
     uid: int | None = Field(default=None, primary_key=True)
@@ -240,13 +271,13 @@ class RecordConverter(Protocol[RecordableModelType, ImmutableRecordType]):
         """Convert a recordable model to an immutable record.
 
         Args:
-            `model` (`RecordableModelType`): The model instance to convert.
+            model (RecordableModelType): The model instance to convert.
 
         Returns:
-            `ImmutableRecordType`: The corresponding immutable record.
+            ImmutableRecordType: The corresponding immutable record.
 
         Raises:
-            `NotImplementedError`: This method must be implemented by subclasses.
+            NotImplementedError: This method must be implemented by subclasses.
         """
         raise NotImplementedError
 
@@ -254,10 +285,10 @@ class RecordConverter(Protocol[RecordableModelType, ImmutableRecordType]):
         """Convert an immutable record back to a recordable model.
 
         Returns:
-            `RecordableModelType`: The reconstructed model instance.
+            RecordableModelType: The reconstructed model instance.
 
         Raises:
-            `NotImplementedError`: This method must be implemented by subclasses.
+            NotImplementedError: This method must be implemented by subclasses.
         """
         raise NotImplementedError
 
@@ -305,11 +336,13 @@ class ModelName(StrEnum):
                 return ModelProvider.OLLAMA
             case _:
                 # Brian - Annoying that we have to do this for type checker but oh well
-                raise ValueError(f"Unsupported `ModelName`: `{self!r}`")
+                raise ValueError(f"Unsupported ModelName: {self!r}")
 
     @classmethod
-    def available(cls, *exclusions: str) -> str:
-        return ", ".join(f"`{m}`" for m in cls if m.value not in exclusions)
+    def available(cls, *inclusions: str) -> list[str]:
+        if len(inclusions) == 0:
+            return [model.value for model in cls]
+        return [model.value for model in cls if model.value in inclusions]
 
     @classmethod
     def supports(cls, model_name: str) -> bool:
@@ -331,7 +364,7 @@ class ModelProvider(StrEnum):
     @classmethod
     def associated_with(cls, model_name: str) -> "ModelProvider":
         if not ModelName.supports(model_name):
-            raise ValueError(f"The model `{model_name}` is not supported by Astro")
+            raise ValueError(f"The model {model_name} is not supported by Astro")
 
         model_name_enum = ModelName(model_name)
         return model_name_enum.provider
@@ -368,8 +401,10 @@ class ModelProvider(StrEnum):
                 )
 
     @classmethod
-    def available(cls, *exclusions: str) -> str:
-        return ", ".join(f"`{m}`" for m in cls if m.value not in exclusions)
+    def available(cls, *inclusions: str) -> list[str]:
+        if len(inclusions) == 0:
+            return [provider.value for provider in cls]
+        return [provider.value for provider in cls if provider.value in inclusions]
 
     @classmethod
     def supports(cls, model_name: str) -> bool:
@@ -377,9 +412,27 @@ class ModelProvider(StrEnum):
         return normalized_value in cls.__members__
 
 
+def _model_provider_options(recommendations: dict[str, ModelName] | None) -> str:
+    if recommendations is None:
+        return options_to_str(ModelProvider.available())
+    return options_to_str(ModelProvider.available(*recommendations.keys()))
+
+
+def _model_name_options() -> str:
+    return options_to_repr_str(ModelName.available())
+
+
+def _available_provider_model_options(model_provider: ModelProvider) -> str:
+    return options_to_repr_str([model.value for model in model_provider.models])
+
+
+def _count_pydantic_fields(model_class: type[BaseModel]) -> int:
+    return len(model_class.model_fields)
+
+
 if __name__ == "__main__":
 
-    class TestModel(RecordableModel):
+    class TestModel(RecordableModel, frozen=True):
         float_value: float = 0.000001
         path_value: Path = Path.cwd()
         date_value: datetime = get_datetime_now()

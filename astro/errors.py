@@ -1,25 +1,30 @@
 from abc import ABC
 from collections.abc import Sequence
 from pathlib import Path
-from typing import Any, TypeVar
+from typing import TYPE_CHECKING, Any, TypeVar
 
-from sqlalchemy.exc import IntegrityError as DBIntegrityError
+from sqlalchemy.exc import IntegrityError as DBIntegrityError  # noqa: F401
 
 from astro.typings import (
     HashableObject,
     ImmutableRecord,
+    ModelName,
+    ModelProvider,
     NamedDict,
     RecordableModel,
     StrPath,
-    _options_to_str,
+    _type_name,
     get_path_type,
-    type_name,
+    options_to_str,
+    secretify,
     type_options,
 )
-from astro.utilities.display import inline_code_format, inline_list_format
 
 AstroErrorType = TypeVar("AstroErrorType", bound="AstroError")
 PythonErrorType = TypeVar("PythonErrorType", bound=Exception)
+
+if TYPE_CHECKING:
+    from astro.llms.base import LLMConfig
 
 
 class AstroError(ABC, Exception):
@@ -84,8 +89,8 @@ class RecordableIdentityError(AstroError):
         caused_by: Exception | None = None,
     ) -> None:
         # Model and record name
-        record_type = type_name(record)
-        other_record_type = type_name(other_record)
+        record_type = _type_name(record)
+        other_record_type = _type_name(other_record)
 
         record_hash = (
             hash(record) if isinstance(record, RecordableModel) else record.record_hash
@@ -114,7 +119,7 @@ class RecordableIdentityError(AstroError):
         super().__init__(message=message, extra=extra, caused_by=caused_by)
 
 
-class ExpectedVarType(AstroError):
+class ExpectedVariableType(AstroError):
     """Raised when a variable's type doesn't match the expected type(s).
 
     This error provides detailed information about type validation failures,
@@ -138,7 +143,7 @@ class ExpectedVarType(AstroError):
 
         # Expected and got type names
         expected_types = type_options(expected_types)
-        got_type = type_name(got)
+        got_type = _type_name(got)
 
         # Error details
         extra = (extra or {}) | {
@@ -148,10 +153,8 @@ class ExpectedVarType(AstroError):
         }
 
         # Error message
-        expected_str = inline_list_format(expected_types)
-        message = (
-            f"Expected `{var_name}` to be {expected_str}. Got `{got_type}` instead"
-        )
+        expected_str = options_to_str(expected_types)
+        message = f"Expected {var_name} to be {expected_str}. Got {got_type} instead"
 
         # Construct parent
         super().__init__(message=message, extra=extra, caused_by=caused_by)
@@ -167,7 +170,7 @@ class ExpectedElementTypeError(AstroError):
     def __init__(
         self,
         *,
-        collection_var_name: str,
+        collection_name: str,
         got: type,
         expected: Sequence[type] | type,
         index_or_key: int | Any | None = None,
@@ -182,22 +185,22 @@ class ExpectedElementTypeError(AstroError):
 
         # Expected and got type names
         expected_types = type_options(expected_types)
-        got_type = type_name(got)
+        got_type = _type_name(got)
 
         # Error details
         extra = (extra or {}) | {
-            "collection_var_name": collection_var_name,
+            "collection_name": collection_name,
             "got_type": got_type,
             "expected_types": expected_types,
         }
 
         # Error message
-        expected_str = inline_list_format(expected_types)
-        message = f"Expected elements of `{collection_var_name}` to be {expected_str}. Got `{got_type}` instead"
+        expected_str = options_to_str(expected_types)
+        message = f"Expected elements of {collection_name} to be {expected_str}. Got {got_type} instead"
 
         if index_or_key is not None:
             extra["index_or_key"] = index_or_key
-            message += f" at index/key `{index_or_key}`"
+            message += f" at index/key {index_or_key}"
 
         # Construct parent
         super().__init__(message=message, extra=extra, caused_by=caused_by)
@@ -225,20 +228,20 @@ class ExpectedTypeError(AstroError):
 
         # Expected and got type names
         expected_types = type_options(expected_types)
-        got_type = type_name(got)
+        got_type = _type_name(got)
 
         # Error details
         extra = (extra or {}) | {"got_type": got_type, "expected_types": expected_types}
 
         # Error message
-        expected_str = inline_list_format(expected_types)
-        message = f"Expected type to be {expected_str}. Got `{got_type}` instead"
+        expected_str = options_to_str(expected_types)
+        message = f"Expected type to be {expected_str}. Got {got_type} instead"
 
         # Construct parent
         super().__init__(message=message, extra=extra, caused_by=caused_by)
 
 
-class KeyTypeError(ExpectedVarType):
+class KeyTypeError(ExpectedVariableType):
     """Raised when a key's type doesn't match the expected type(s)."""
 
     def __init__(
@@ -271,7 +274,7 @@ class KeyStrError(KeyTypeError):
         super().__init__(got=got, expected=str, extra=extra, caused_by=caused_by)
 
 
-class ValueTypeError(ExpectedVarType):
+class ValueTypeError(ExpectedVariableType):
     """Raised when a value's type doesn't match the expected type(s)."""
 
     def __init__(
@@ -321,7 +324,7 @@ class NoEntryError(AstroError, KeyError):
             object_hashes = []
             for src in sources_seq:
                 if isinstance(src, (RecordableModel, ImmutableRecord)):
-                    object_type = type_name(type(src))
+                    object_type = _type_name(type(src))
                     object_hash = (
                         hash(src)
                         if isinstance(src, RecordableModel)
@@ -329,8 +332,6 @@ class NoEntryError(AstroError, KeyError):
                     )
                     formatted_sources.append(f"{object_type} ({object_hash})")
                     object_hashes.append(object_hash)
-                elif isinstance(src, str):
-                    formatted_sources.append(inline_code_format(src))
                 else:
                     formatted_sources.append(repr(src))
             if object_hashes:
@@ -341,9 +342,9 @@ class NoEntryError(AstroError, KeyError):
             formatted_sources = []
 
         # Error message
-        message = f"No entry for key `{key_value}`"
+        message = f"No entry for key {key_value}"
         if formatted_sources:
-            message += " in sources " + _options_to_str(formatted_sources)
+            message += " in sources " + options_to_str(formatted_sources)
 
         # Construct parent
         super().__init__(message=message, extra=extra, caused_by=caused_by)
@@ -373,7 +374,7 @@ class LoadError(AstroError):
 
         # Object to save
         extra["object_or_key_type"] = type(obj_or_key)
-        message += f" {type_name(obj_or_key)}"
+        message += f" {_type_name(obj_or_key)}"
 
         # Object has hash
         if isinstance(obj_or_key, (RecordableModel, ImmutableRecord)):
@@ -398,12 +399,12 @@ class LoadError(AstroError):
             extra["name"] = path_or_uid.name
             extra["path_exists"] = path_or_uid.exists()
             extra["path_type"] = get_path_type(path_or_uid)
-            message += f" {inline_code_format(str(path_or_uid))}"
+            message += f" {str(path_or_uid)}"
 
         # Add uid
         elif path_or_uid is not None:
             extra["uid"] = path_or_uid
-            message += f" using uid {inline_code_format(str(path_or_uid))}"
+            message += f" using uid {secretify(path_or_uid)}"
 
         # Construct parent
         super().__init__(message=message, extra=extra, caused_by=caused_by)
@@ -433,7 +434,7 @@ class SaveError(AstroError):
 
         # Object to save
         extra["object_type"] = type(obj_to_save)
-        message += f" {type_name(obj_to_save)}"
+        message += f" {_type_name(obj_to_save)}"
 
         # Object has hash
         if isinstance(obj_to_save, (RecordableModel, ImmutableRecord)):
@@ -443,7 +444,7 @@ class SaveError(AstroError):
                 else obj_to_save.record_hash
             )
             extra["object_hash"] = object_hash
-            message += f" ({object_hash})"
+            message += f" ({secretify(object_hash)})"
 
         message += " to"
 
@@ -458,12 +459,12 @@ class SaveError(AstroError):
             extra["name"] = path_or_uid.name
             extra["path_exists"] = path_or_uid.exists()
             extra["path_type"] = get_path_type(path_or_uid)
-            message += f" {inline_code_format(str(path_or_uid))}"
+            message += f" {str(path_or_uid)}"
 
         # Add uid
         elif path_or_uid is not None:
             extra["uid"] = path_or_uid
-            message += f" using uid {inline_code_format(str(path_or_uid))}"
+            message += f" using uid {secretify(path_or_uid)}"
 
         # Construct parent
         super().__init__(message=message, extra=extra, caused_by=caused_by)
@@ -492,19 +493,19 @@ class ModelFileStoreError(AstroError):
         message = f"Error occurred during store operation `{operation}`"
 
         if model_or_uid is not None and isinstance(model_or_uid, RecordableModel):
-            extra["model_type"] = model_or_uid
+            extra["model_type"] = type(model_or_uid)
             extra["model_hash"] = hash(model_or_uid)
-            message += f" of model {type_name(model_or_uid)} ({hash(model_or_uid)})"
+            message += f" of model {_type_name(model_or_uid)} ({secretify(hash(model_or_uid))})"
         if (
             model_or_uid is not None
             and isinstance(model_or_uid, type)
             and issubclass(model_or_uid, RecordableModel)
         ):
             extra["model_type"] = model_or_uid
-            message += f" of model type {type_name(model_or_uid)}"
+            message += f" of model type {model_or_uid.__name__}"
         elif model_or_uid is not None:
             extra["model_uid"] = model_or_uid
-            message += f" for model uid {model_or_uid}"
+            message += f" for model uid {secretify(model_or_uid)}"
 
         if stores is not None and isinstance(stores, Sequence):
             for store in stores:
@@ -513,14 +514,77 @@ class ModelFileStoreError(AstroError):
                 extra[f"store_{name}_root_dir"] = store.root_dir
                 extra[f"store_{name}_model_type"] = store.model_type
                 extra[f"store_{name}_index_path"] = store.index_file
-            message += f" in stores {_options_to_str([store.name for store in stores])}"
+            message += f" in stores {options_to_str([store.name for store in stores])}"
         elif stores is not None:
             extra["store_name"] = stores.name
             extra["store_root_dir"] = stores.root_dir
-            extra["store_model_type"] = type_name(stores.model_type)
+            extra["store_model_type"] = stores.model_type
             extra["store_index_path"] = stores.index_file
-            message += f" in store `{stores.name}` for model type `{type_name(stores.model_type)}`"
+            message += (
+                f" in store {stores.name} for model type {stores.model_type.__name__}"
+            )
 
+        if reason is not None and len(reason.strip()) > 0:
+            extra["reason"] = reason
+            message += f": {reason}"
+        else:
+            extra["reason"] = "unspecified"
+
+        # Construct parent
+        super().__init__(message=message, extra=extra, caused_by=caused_by)
+
+
+class LLMError(AstroError):
+    """Raised when an error occurs relating to LLMs."""
+
+    def __init__(
+        self,
+        *,
+        message: str,
+        model_identifier: str | ModelName | ModelProvider | None = None,
+        model_name: str | ModelName | ModelProvider | Any = None,
+        model_provider: str | ModelProvider | Any = None,
+        model_config: "LLMConfig | None" = None,
+        extra: NamedDict | None = None,
+        caused_by: Exception | None = None,
+    ):
+        # Error details
+        extra = extra or {}
+
+        if model_identifier is not None:
+            extra["model_identifier"] = model_identifier
+
+        if model_name is not None:
+            extra["model_name"] = model_name
+
+        if model_provider is not None:
+            extra["model_provider"] = model_provider
+
+        if model_config is not None:
+            extra["model_config"] = model_config.model_dump(mode="json")
+            extra["model_config_type"] = type(model_config)
+            extra["model_config_hash"] = hash(model_config)
+
+        super().__init__(message=message, extra=extra, caused_by=caused_by)
+
+
+class SupportError(AstroError):
+    """Raised when something is not supported by Astro."""
+
+    def __init__(
+        self,
+        *,
+        feature: str,
+        reason: str | None = None,
+        extra: NamedDict | None = None,
+        caused_by: Exception | None = None,
+    ):
+        # Error details
+        extra = extra or {}
+        extra["feature"] = feature
+
+        # Error message
+        message = f"'{feature}' is not supported by Astro"
         if reason is not None and len(reason.strip()) > 0:
             extra["reason"] = reason
             message += f": {reason}"
@@ -534,7 +598,11 @@ class ModelFileStoreError(AstroError):
 if __name__ == "__main__":
     from astro.typings import ImmutableRecord, RecordableModel
 
-    obj = "hey there"
+    class TestModel(RecordableModel, frozen=True):
+        id: int
+        name: str
+
+    obj = TestModel(id=1, name="Test")
 
     try:
         1 / 0  # type: ignore
