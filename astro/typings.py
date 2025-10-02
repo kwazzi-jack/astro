@@ -1,14 +1,21 @@
 import base64
 import json
 import random
-from abc import ABC
-from collections.abc import Sequence
+from abc import ABC, abstractmethod
+from collections.abc import Generator, Sequence
 from datetime import datetime
 from enum import StrEnum
 from pathlib import Path
-from typing import Any, Protocol, TypeAlias, TypeVar
+from typing import Any, Generic, Self, TypeAlias, TypeVar
 
 import blake3
+from langchain_core.messages import (
+    AIMessage,
+    BaseMessage,
+    HumanMessage,
+    SystemMessage,
+    ToolMessage,
+)
 from pydantic import BaseModel, ConfigDict
 from sqlmodel import Field, SQLModel
 
@@ -26,6 +33,37 @@ ImmutableRecordType = TypeVar(
 )
 HashableObject: TypeAlias = "RecordableModel | ImmutableRecord"
 NamedDict: TypeAlias = dict[str, Any]
+PromptGenerator: TypeAlias = Generator[BaseMessage, None, None]
+BaseMessageType = TypeVar("BaseMessageType", bound=BaseMessage)
+RecordTableType = TypeVar("RecordTableType", bound="ImmutableRecord[RecordableModel]")
+
+
+class MessageRole(StrEnum):
+    SYSTEM = "system"
+    USER = "user"
+    HUMAN = "human"  # Alias for USER
+    ASSISTANT = "assistant"
+    AI = "ai"  # Alias for ASSISTANT
+    TOOL = "tool"
+    FUNCTION = "function"  # Alias for TOOL
+
+    @property
+    def message_type(self) -> type[BaseMessage]:
+        match self:
+            case MessageRole.SYSTEM:
+                return SystemMessage
+            case MessageRole.USER | MessageRole.HUMAN:
+                return HumanMessage
+            case MessageRole.ASSISTANT | MessageRole.AI:
+                return AIMessage
+            case MessageRole.FUNCTION | MessageRole.TOOL:
+                return ToolMessage
+
+            # Fail safe
+            case default:
+                raise ValueError(
+                    f"Probably internal mistake that {default} is not assigned yet"
+                )
 
 
 def secretify(value: Any) -> str:
@@ -52,7 +90,7 @@ def secretify(value: Any) -> str:
     return f"{prefix}{'*' * num_asterisks}{suffix}"
 
 
-def _str_dict_to_path_dict(contents: StrDict) -> PathDict:
+def str_dict_to_path_dict(contents: StrDict) -> PathDict:
     try:
         return {key: Path(value).resolve() for key, value in contents.items()}
     except Exception as error:
@@ -61,7 +99,7 @@ def _str_dict_to_path_dict(contents: StrDict) -> PathDict:
         ) from error
 
 
-def _path_dict_to_str_dict(contents: PathDict) -> StrDict:
+def path_dict_to_str_dict(contents: PathDict) -> StrDict:
     try:
         return {key: str(value) for key, value in contents.items()}
     except Exception as error:
@@ -70,7 +108,7 @@ def _path_dict_to_str_dict(contents: PathDict) -> StrDict:
         ) from error
 
 
-def _type_name(obj: Any) -> str:
+def type_name(obj: Any) -> str:
     if isinstance(obj, type):
         return obj.__name__
     else:
@@ -91,10 +129,7 @@ def options_to_repr_str(values: Sequence[str]) -> str:
 
 
 def type_options(objects: Sequence[Any]) -> list[str]:
-    return list(map(_type_name, objects))
-
-
-def format_object(): ...
+    return list(map(type_name, objects))
 
 
 class PathKind(StrEnum):
@@ -150,7 +185,7 @@ class RecordableModel(BaseModel, frozen=True):
     model_config = ConfigDict(
         frozen=True,
         # These ensure consistent serialization:
-        use_enum_values=True,  # Convert enums to their values
+        use_enum_values=False,  # Don't convert enums to their values
         json_encoders={
             datetime: _datetime_json_encoder,  # Consistent datetime format
             Path: _path_json_encoder,  # Convert Path to string
@@ -234,7 +269,7 @@ class RecordableModel(BaseModel, frozen=True):
         return secretify(self.uid)
 
 
-class ImmutableRecord(ABC, SQLModel):
+class ImmutableRecord(SQLModel, ABC, Generic[RecordableModelType]):
     """Base SQLModel for immutable database records.
 
     This class represents a persistent, immutable record with metadata for tracking access.
@@ -247,6 +282,7 @@ class ImmutableRecord(ABC, SQLModel):
         access_count (int): Number of times the record has been accessed.
     """
 
+    __abstract__ = True
     uid: int | None = Field(default=None, primary_key=True)
     record_hash: int = Field(index=True, unique=True, nullable=False)
     created_at: datetime = Field(default_factory=get_datetime_now)
@@ -255,19 +291,9 @@ class ImmutableRecord(ABC, SQLModel):
     last_accessed_at: datetime | None = Field(default=None, nullable=True)
     access_count: int = Field(default=0)
 
-
-class RecordConverter(Protocol[RecordableModelType, ImmutableRecordType]):
-    """Protocol for converting between recordable models and immutable records.
-
-    This Protocol defines methods for bidirectional conversion between a model type
-    and its corresponding immutable record type, ensuring type safety.
-
-    Attributes:
-        None (this is a Protocol with no attributes).
-    """
-
     @classmethod
-    def from_model(cls, model: RecordableModelType) -> ImmutableRecordType:
+    @abstractmethod
+    def from_model(cls, model: RecordableModelType) -> Self:
         """Convert a recordable model to an immutable record.
 
         Args:
@@ -281,8 +307,12 @@ class RecordConverter(Protocol[RecordableModelType, ImmutableRecordType]):
         """
         raise NotImplementedError
 
-    def to_model(self) -> RecordableModelType:
+    @abstractmethod
+    def to_model(self, *dependencies: RecordableModel) -> RecordableModelType:
         """Convert an immutable record back to a recordable model.
+
+        Args:
+            *dependencies (RecordableModelType): Additional dependencies required for reconstruction.
 
         Returns:
             RecordableModelType: The reconstructed model instance.
@@ -291,6 +321,14 @@ class RecordConverter(Protocol[RecordableModelType, ImmutableRecordType]):
             NotImplementedError: This method must be implemented by subclasses.
         """
         raise NotImplementedError
+
+    @property
+    def secret_uid(self) -> str:
+        return secretify(self.uid)
+
+    @property
+    def secret_hash(self) -> str:
+        return secretify(self.record_hash)
 
 
 class ModelName(StrEnum):
@@ -412,22 +450,36 @@ class ModelProvider(StrEnum):
         return normalized_value in cls.__members__
 
 
-def _model_provider_options(recommendations: dict[str, ModelName] | None) -> str:
+def model_provider_options(recommendations: dict[str, ModelName] | None) -> str:
     if recommendations is None:
         return options_to_str(ModelProvider.available())
     return options_to_str(ModelProvider.available(*recommendations.keys()))
 
 
-def _model_name_options() -> str:
+def model_name_options() -> str:
     return options_to_repr_str(ModelName.available())
 
 
-def _available_provider_model_options(model_provider: ModelProvider) -> str:
+def available_provider_model_options(model_provider: ModelProvider) -> str:
     return options_to_repr_str([model.value for model in model_provider.models])
 
 
-def _count_pydantic_fields(model_class: type[BaseModel]) -> int:
+def count_pydantic_fields(model_class: type[BaseModel]) -> int:
     return len(model_class.model_fields)
+
+
+def get_class_import_path(cls: type) -> str:
+    return f"{cls.__module__}.{cls.__name__}"
+
+
+def get_class_from_import_path(import_path: str) -> type:
+    components = import_path.split(".")
+    module_path = ".".join(components[:-1])
+    class_name = components[-1]
+
+    module = __import__(module_path, fromlist=[class_name])
+    cls = getattr(module, class_name)
+    return cls
 
 
 if __name__ == "__main__":

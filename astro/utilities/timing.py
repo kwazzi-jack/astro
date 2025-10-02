@@ -47,7 +47,7 @@ def get_datetime_str(dt: datetime) -> str:
     return f"{get_time_str(dt)}, {get_date_str(dt)}"
 
 
-def get_period_str(dt: datetime) -> str:
+def get_day_period_str(dt: datetime) -> str:
     hour = dt.hour
     if 0 <= hour < 12:
         return "morning"
@@ -152,4 +152,4 @@ if __name__ == "__main__":
     now = get_datetime_now()
     print(f"{get_date_str(now)=}")
     print(f"{get_time_str(now)=}")
-    print(f"{get_period_str(now)=}")
+    print(f"{get_day_period_str(now)=}")

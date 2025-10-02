@@ -1,10 +1,13 @@
+# --- Internal Imports ---
 from abc import ABC
 from collections.abc import Sequence
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, TypeVar
 
-from sqlalchemy.exc import IntegrityError as DBIntegrityError  # noqa: F401
+# --- External Imports ---
+from sqlalchemy.exc import IntegrityError  # noqa: F401
 
+# --- Local Imports ---
 from astro.typings import (
     HashableObject,
     ImmutableRecord,
@@ -13,10 +16,10 @@ from astro.typings import (
     NamedDict,
     RecordableModel,
     StrPath,
-    _type_name,
     get_path_type,
     options_to_str,
     secretify,
+    type_name,
     type_options,
 )
 
@@ -61,6 +64,35 @@ class AstroError(ABC, Exception):
         }
 
 
+class AstroDatabaseError(AstroError):
+    """Raised when an error occurs relating to the database."""
+
+    def __init__(
+        self,
+        *,
+        message: str,
+        db_path: StrPath | None = None,
+        db_exists: bool | None = None,
+        db_type: str | None = None,
+        extra: NamedDict | None = None,
+        caused_by: Exception | None = None,
+    ):
+        # Error details
+        extra = extra or {}
+
+        if db_path is not None:
+            extra["db_path"] = str(db_path)
+            extra["db_name"] = Path(db_path).name
+
+        if db_exists is not None:
+            extra["db_exists"] = db_exists
+
+        if db_type is not None:
+            extra["db_type"] = db_type
+
+        super().__init__(message=message, extra=extra, caused_by=caused_by)
+
+
 class SetupError(AstroError):
     """Raised when an error occurs during setup."""
 
@@ -89,8 +121,8 @@ class RecordableIdentityError(AstroError):
         caused_by: Exception | None = None,
     ) -> None:
         # Model and record name
-        record_type = _type_name(record)
-        other_record_type = _type_name(other_record)
+        record_type = type_name(record)
+        other_record_type = type_name(other_record)
 
         record_hash = (
             hash(record) if isinstance(record, RecordableModel) else record.record_hash
@@ -130,8 +162,9 @@ class ExpectedVariableType(AstroError):
         self,
         *,
         var_name: str,
-        got: type,
         expected: Sequence[type] | type,
+        got: type,
+        with_value: Any | None = None,
         extra: NamedDict | None = None,
         caused_by: Exception | None = None,
     ):
@@ -143,7 +176,7 @@ class ExpectedVariableType(AstroError):
 
         # Expected and got type names
         expected_types = type_options(expected_types)
-        got_type = _type_name(got)
+        got_type = type_name(got)
 
         # Error details
         extra = (extra or {}) | {
@@ -155,6 +188,10 @@ class ExpectedVariableType(AstroError):
         # Error message
         expected_str = options_to_str(expected_types)
         message = f"Expected {var_name} to be {expected_str}. Got {got_type} instead"
+
+        if with_value is not None:
+            extra["got_value"] = with_value
+            message += f" with value {with_value}"
 
         # Construct parent
         super().__init__(message=message, extra=extra, caused_by=caused_by)
@@ -171,9 +208,10 @@ class ExpectedElementTypeError(AstroError):
         self,
         *,
         collection_name: str,
-        got: type,
         expected: Sequence[type] | type,
+        got: type,
         index_or_key: int | Any | None = None,
+        with_value: Any | None = None,
         extra: NamedDict | None = None,
         caused_by: Exception | None = None,
     ):
@@ -185,7 +223,7 @@ class ExpectedElementTypeError(AstroError):
 
         # Expected and got type names
         expected_types = type_options(expected_types)
-        got_type = _type_name(got)
+        got_type = type_name(got)
 
         # Error details
         extra = (extra or {}) | {
@@ -202,6 +240,10 @@ class ExpectedElementTypeError(AstroError):
             extra["index_or_key"] = index_or_key
             message += f" at index/key {index_or_key}"
 
+        if with_value is not None:
+            extra["got_value"] = with_value
+            message += f" with value {with_value}"
+
         # Construct parent
         super().__init__(message=message, extra=extra, caused_by=caused_by)
 
@@ -215,8 +257,9 @@ class ExpectedTypeError(AstroError):
     def __init__(
         self,
         *,
-        got: type,
         expected: Sequence[type] | type,
+        got: type,
+        with_value: Any | None = None,
         extra: NamedDict | None = None,
         caused_by: Exception | None = None,
     ):
@@ -228,7 +271,7 @@ class ExpectedTypeError(AstroError):
 
         # Expected and got type names
         expected_types = type_options(expected_types)
-        got_type = _type_name(got)
+        got_type = type_name(got)
 
         # Error details
         extra = (extra or {}) | {"got_type": got_type, "expected_types": expected_types}
@@ -236,6 +279,10 @@ class ExpectedTypeError(AstroError):
         # Error message
         expected_str = options_to_str(expected_types)
         message = f"Expected type to be {expected_str}. Got {got_type} instead"
+
+        if with_value is not None:
+            extra["got_value"] = with_value
+            message += f" with value {with_value}"
 
         # Construct parent
         super().__init__(message=message, extra=extra, caused_by=caused_by)
@@ -247,15 +294,17 @@ class KeyTypeError(ExpectedVariableType):
     def __init__(
         self,
         *,
-        got: type,
         expected: Sequence[type] | type,
+        got: type,
+        with_value: Any | None = None,
         extra: NamedDict | None = None,
         caused_by: Exception | None = None,
     ):
         super().__init__(
             var_name="key",
-            got=got,
             expected=expected,
+            got=got,
+            with_value=with_value,
             caused_by=caused_by,
             extra=extra,
         )
@@ -268,10 +317,17 @@ class KeyStrError(KeyTypeError):
         self,
         *,
         got: type,
+        with_value: Any | None = None,
         extra: NamedDict | None = None,
         caused_by: Exception | None = None,
     ):
-        super().__init__(got=got, expected=str, extra=extra, caused_by=caused_by)
+        super().__init__(
+            expected=str,
+            got=got,
+            with_value=with_value,
+            extra=extra,
+            caused_by=caused_by,
+        )
 
 
 class ValueTypeError(ExpectedVariableType):
@@ -280,15 +336,17 @@ class ValueTypeError(ExpectedVariableType):
     def __init__(
         self,
         *,
-        got: type,
         expected: Sequence[type] | type,
+        got: type,
+        with_value: Any | None = None,
         extra: NamedDict | None = None,
         caused_by: Exception | None = None,
     ):
         super().__init__(
             var_name="value",
-            got=got,
             expected=expected,
+            got=got,
+            with_value=with_value,
             caused_by=caused_by,
             extra=extra,
         )
@@ -324,7 +382,7 @@ class NoEntryError(AstroError, KeyError):
             object_hashes = []
             for src in sources_seq:
                 if isinstance(src, (RecordableModel, ImmutableRecord)):
-                    object_type = _type_name(type(src))
+                    object_type = type_name(type(src))
                     object_hash = (
                         hash(src)
                         if isinstance(src, RecordableModel)
@@ -374,7 +432,7 @@ class LoadError(AstroError):
 
         # Object to save
         extra["object_or_key_type"] = type(obj_or_key)
-        message += f" {_type_name(obj_or_key)}"
+        message += f" {type_name(obj_or_key)}"
 
         # Object has hash
         if isinstance(obj_or_key, (RecordableModel, ImmutableRecord)):
@@ -434,7 +492,7 @@ class SaveError(AstroError):
 
         # Object to save
         extra["object_type"] = type(obj_to_save)
-        message += f" {_type_name(obj_to_save)}"
+        message += f" {type_name(obj_to_save)}"
 
         # Object has hash
         if isinstance(obj_to_save, (RecordableModel, ImmutableRecord)):
@@ -495,7 +553,9 @@ class ModelFileStoreError(AstroError):
         if model_or_uid is not None and isinstance(model_or_uid, RecordableModel):
             extra["model_type"] = type(model_or_uid)
             extra["model_hash"] = hash(model_or_uid)
-            message += f" of model {_type_name(model_or_uid)} ({secretify(hash(model_or_uid))})"
+            message += (
+                f" of model {type_name(model_or_uid)} ({secretify(hash(model_or_uid))})"
+            )
         if (
             model_or_uid is not None
             and isinstance(model_or_uid, type)
@@ -593,6 +653,145 @@ class SupportError(AstroError):
 
         # Construct parent
         super().__init__(message=message, extra=extra, caused_by=caused_by)
+
+
+class CreationError(AstroError):
+    """Raised when an error occurs during creation of an object."""
+
+    def __init__(
+        self,
+        *,
+        object_type: type | str,
+        reason: str | None = None,
+        extra: NamedDict | None = None,
+        caused_by: Exception | None = None,
+    ):
+        # Error details
+        extra = extra or {}
+        extra["object_type"] = object_type
+
+        # Error message
+        object_type_name = (
+            object_type if isinstance(object_type, str) else type_name(object_type)
+        )
+        message = f"Error occurred during creation of {object_type_name}"
+        if reason is not None and len(reason.strip()) > 0:
+            extra["reason"] = reason
+            message += f": {reason}"
+        else:
+            extra["reason"] = "unspecified"
+
+        # Construct parent
+        super().__init__(message=message, extra=extra, caused_by=caused_by)
+
+
+# --- SQL Errors ---
+
+
+class SQLIntegrityError(AstroDatabaseError):
+    """Raised when a database integrity error occurs."""
+
+    def __init__(
+        self,
+        *,
+        operation: str,
+        reason: str | None = None,
+        database: str | None = None,
+        table: str
+        | type[ImmutableRecord[Any]]
+        | Sequence[type[ImmutableRecord[Any]]]
+        | None = None,
+        extra: NamedDict | None = None,
+        caused_by: Exception | None = None,
+    ):
+        # Error details
+        extra = extra or {}
+        extra["operation"] = operation
+
+        if database is not None:
+            extra["database"] = database
+
+        # Error message
+        message = f"Database integrity error during {operation} operation"
+
+        if table is not None:
+            extra["table"] = table
+            if isinstance(table, Sequence) and not isinstance(table, str):
+                message += " on tables " + options_to_str(
+                    [str(subtable.__tablename__) for subtable in table]
+                )
+            elif isinstance(table, type):
+                message += f" on table {table.__tablename__}"
+            else:
+                message += f" on table {table}"
+
+        if reason is not None and len(reason.strip()) > 0:
+            extra["reason"] = reason
+            message += f": {reason}"
+        else:
+            extra["reason"] = "unspecified"
+
+        # Construct parent
+        super().__init__(
+            message=message,
+            db_path=database,
+            db_type="SQL",
+            extra=extra,
+            caused_by=caused_by,
+        )
+
+
+class SQLRetrievalError(AstroDatabaseError):
+    """Raised when a database retrieval error occurs."""
+
+    def __init__(
+        self,
+        *,
+        operation: str,
+        reason: str | None = None,
+        database: str | None = None,
+        table: str
+        | type[ImmutableRecord[Any]]
+        | Sequence[type[ImmutableRecord[Any]]]
+        | None = None,
+        extra: NamedDict | None = None,
+        caused_by: Exception | None = None,
+    ):
+        # Error details
+        extra = extra or {}
+        extra["operation"] = operation
+
+        if database is not None:
+            extra["database"] = database
+
+        # Error message
+        message = f"Database retrieval error during {operation} operation"
+
+        if table is not None:
+            extra["table"] = table
+            if isinstance(table, Sequence) and not isinstance(table, str):
+                message += " on tables " + options_to_str(
+                    [str(subtable.__tablename__) for subtable in table]
+                )
+            elif isinstance(table, type):
+                message += f" on table {table.__tablename__}"
+            else:
+                message += f" on table {table}"
+
+        if reason is not None and len(reason.strip()) > 0:
+            extra["reason"] = reason
+            message += f": {reason}"
+        else:
+            extra["reason"] = "unspecified"
+
+        # Construct parent
+        super().__init__(
+            message=message,
+            db_path=database,
+            db_type="SQL",
+            extra=extra,
+            caused_by=caused_by,
+        )
 
 
 if __name__ == "__main__":

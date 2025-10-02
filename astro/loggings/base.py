@@ -1,5 +1,6 @@
 # astro/logger.py
 
+# --- Internal Imports ---
 import datetime
 import enum
 import json
@@ -13,14 +14,17 @@ from logging.handlers import TimedRotatingFileHandler
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
+# --- External Imports ---
 from rich.console import Console
 from rich.logging import RichHandler
 from rich.text import Text
 from rich.theme import Theme
 
+# --- Local Imports ---
 from astro.errors import (
     AstroError,
     AstroErrorType,
+    CreationError,
     ExpectedElementTypeError,
     ExpectedTypeError,
     ExpectedVariableType,
@@ -34,6 +38,8 @@ from astro.errors import (
     RecordableIdentityError,
     SaveError,
     SetupError,
+    SQLIntegrityError,
+    SQLRetrievalError,
     SupportError,
     ValueTypeError,
 )
@@ -45,7 +51,7 @@ from astro.typings import (
     NamedDict,
     RecordableModel,
     StrPath,
-    _type_name,
+    type_name,
 )
 
 if TYPE_CHECKING:
@@ -85,11 +91,11 @@ _BASE_LOG_LEVEL = logging.INFO
 
 def _get_log_file():
     """Get the log file path, importing _LOG_DIR lazily to avoid circular imports."""
-    from astro.paths import _LOG_DIR
+    from astro.paths import LOG_DIR
 
-    if _LOG_DIR is None:
+    if LOG_DIR is None:
         return "astro.jsonl"
-    return _LOG_DIR / "astro.jsonl"
+    return LOG_DIR / "astro.jsonl"
 
 
 # Internal flag to ensure setup runs only once
@@ -375,7 +381,7 @@ class Loggy:
         Args:
             error (Exception): The built-in exception to log.
         """
-        message = f"{_type_name(error)}: {error}"
+        message = f"{type_name(error)}: {error}"
         try:
             # Try log exception if in exception handler
             self.exception(message, execution_info=True)
@@ -427,7 +433,7 @@ class Loggy:
             self._log_builtin_exception(caused_by)
 
         # Log Python error
-        self.error(msg=f"{_type_name(error)}: {error}", extra=extra or {})
+        self.error(msg=f"{type_name(error)}: {error}", extra=extra or {})
 
         # Tag the error as coming from Loggy
         setattr(error, _LOGGY_TAG_ATTR, True)
@@ -794,7 +800,7 @@ class Loggy:
             extra=extra,
         )
 
-    # --- Astro Error Logging ---
+    # --- Local Error Logging ---
 
     def SetupError(
         self,
@@ -864,8 +870,9 @@ class Loggy:
         self,
         *,
         var_name: str,
-        got: type,
         expected: Sequence[type] | type,
+        got: type,
+        with_value: Any | None = None,
         caused_by: AstroError | Exception | None = None,
         warning: str | None = None,
         skip_error_log: bool = False,
@@ -875,22 +882,27 @@ class Loggy:
 
         Args:
             var_name (str): The name of the variable.
-            got (type): The type received.
             expected (Sequence[type] | type): The type(s) expected.
+            got (type): The type received.
+            with_value (Any | None): The actual value received, if available. Defaults to None.
             caused_by (AstroError | Exception | None, optional): The error to wrap. Defaults to None.
             warning (str | None, optional): An optional warning message to log before the error. Defaults to None.
             skip_error_log (bool, optional): If True, logging is skipped. Defaults to False.
             extra (Any, optional): Additional details to include in the log.
 
         Returns:
-            ExpectedVarType: The created error instance.
+            ExpectedVariableType: The created error instance.
         """
         if warning is not None:
             self.warning(warning)
 
         return self._log_and_return_astro_error(
             error=ExpectedVariableType(
-                var_name=var_name, got=got, expected=expected, extra=extra
+                var_name=var_name,
+                expected=expected,
+                got=got,
+                with_value=with_value,
+                extra=extra,
             ),
             caused_by=caused_by,
             warning=warning,
@@ -901,9 +913,10 @@ class Loggy:
         self,
         *,
         collection_var_name: str,
-        got: type,
         expected: Sequence[type] | type,
+        got: type,
         index_or_key: int | Any | None = None,
+        with_value: Any | None = None,
         extra: NamedDict | None = None,
         caused_by: AstroError | Exception | None = None,
         warning: str | None = None,
@@ -912,9 +925,10 @@ class Loggy:
 
         Args:
             collection_var_name (str): The name of the collection variable.
-            got (type): The type received.
             expected (Sequence[type] | type): The type(s) expected.
+            got (type): The type received.
             index_or_key (int | Any | None, optional): The index or key where the error occurred. Defaults to None.
+            with_value (Any | None, optional): The actual value received, if available. Defaults to None.
             extra (NamedDict | None, optional): Additional details to include in the log. Defaults to None.
             caused_by (AstroError | Exception | None, optional): The error to wrap. Defaults to None.
             warning (str | None, optional): An optional warning message to log before the error. Defaults to None.
@@ -928,9 +942,10 @@ class Loggy:
         return self._log_and_return_astro_error(
             error=ExpectedElementTypeError(
                 collection_name=collection_var_name,
-                got=got,
                 expected=expected,
+                got=got,
                 index_or_key=index_or_key,
+                with_value=with_value,
                 extra=extra,
             ),
             caused_by=caused_by,
@@ -940,8 +955,9 @@ class Loggy:
     def ExpectedTypeError(
         self,
         *,
-        got: type,
         expected: Sequence[type] | type,
+        got: type,
+        with_value: Any | None = None,
         caused_by: AstroError | Exception | None = None,
         warning: str | None = None,
         skip_error_log: bool = False,
@@ -950,8 +966,9 @@ class Loggy:
         """Creates, logs, and returns an ExpectedTypeError.
 
         Args:
-            got (type): The type received.
             expected (Sequence[type] | type): The type(s) expected.
+            got (type): The type received.
+            with_value (Any | None, optional): The actual value received, if available. Defaults to None.
             caused_by (AstroError | Exception | None, optional): The error to wrap. Defaults to None.
             warning (str | None, optional): An optional warning message to log before the error. Defaults to None.
             skip_error_log (bool, optional): If True, logging is skipped. Defaults to False.
@@ -964,7 +981,9 @@ class Loggy:
             self.warning(warning)
 
         return self._log_and_return_astro_error(
-            error=ExpectedTypeError(got=got, expected=expected, extra=extra),
+            error=ExpectedTypeError(
+                expected=expected, got=got, with_value=with_value, extra=extra
+            ),
             caused_by=caused_by,
             warning=warning,
             skip_error_log=skip_error_log,
@@ -973,8 +992,9 @@ class Loggy:
     def KeyTypeError(
         self,
         *,
-        got: type,
         expected: Sequence[type] | type,
+        got: type,
+        with_value: Any | None = None,
         caused_by: AstroError | Exception | None = None,
         warning: str | None = None,
         skip_error_log: bool = False,
@@ -983,8 +1003,9 @@ class Loggy:
         """Creates, logs, and returns a KeyTypeError.
 
         Args:
-            got (type): The type received.
             expected (Sequence[type] | type): The type(s) expected.
+            got (type): The type received.
+            with_value (Any | None, optional): The actual value received, if available. Defaults to None.
             caused_by (AstroError | Exception | None, optional): The error to wrap. Defaults to None.
             warning (str | None, optional): An optional warning message to log before the error. Defaults to None.
             skip_error_log (bool, optional): If True, logging is skipped. Defaults to False.
@@ -997,7 +1018,9 @@ class Loggy:
             self.warning(warning)
 
         return self._log_and_return_astro_error(
-            error=KeyTypeError(got=got, expected=expected, extra=extra),
+            error=KeyTypeError(
+                expected=expected, got=got, with_value=with_value, extra=extra
+            ),
             caused_by=caused_by,
             warning=warning,
             skip_error_log=skip_error_log,
@@ -1007,6 +1030,7 @@ class Loggy:
         self,
         *,
         got: type,
+        with_value: Any | None = None,
         caused_by: AstroError | Exception | None = None,
         warning: str | None = None,
         skip_error_log: bool = False,
@@ -1016,6 +1040,7 @@ class Loggy:
 
         Args:
             got (type): The type received.
+            with_value (Any | None, optional): The actual value received, if available. Defaults to None.
             caused_by (AstroError | Exception | None, optional): The error to wrap. Defaults to None.
             warning (str | None, optional): An optional warning message to log before the error. Defaults to None.
             skip_error_log (bool, optional): If True, logging is skipped. Defaults to False.
@@ -1028,7 +1053,7 @@ class Loggy:
             self.warning(warning)
 
         return self._log_and_return_astro_error(
-            error=KeyStrError(got=got, extra=extra),
+            error=KeyStrError(got=got, with_value=with_value, extra=extra),
             caused_by=caused_by,
             warning=warning,
             skip_error_log=skip_error_log,
@@ -1037,8 +1062,9 @@ class Loggy:
     def ValueTypeError(
         self,
         *,
-        got: type,
         expected: Sequence[type] | type,
+        got: type,
+        with_value: Any | None = None,
         caused_by: AstroError | Exception | None = None,
         warning: str | None = None,
         skip_error_log: bool = False,
@@ -1047,8 +1073,9 @@ class Loggy:
         """Creates, logs, and returns a ValueTypeError.
 
         Args:
-            got (type): The type received.
             expected (Sequence[type] | type): The type(s) expected.
+            got (type): The type received.
+            with_value (Any | None, optional): The actual value received, if available. Defaults to None.
             caused_by (AstroError | Exception | None, optional): The error to wrap. Defaults to None.
             warning (str | None, optional): An optional warning message to log before the error. Defaults to None.
             skip_error_log (bool, optional): If True, logging is skipped. Defaults to False.
@@ -1061,7 +1088,9 @@ class Loggy:
             self.warning(warning)
 
         return self._log_and_return_astro_error(
-            error=ValueTypeError(got=got, expected=expected, extra=extra),
+            error=ValueTypeError(
+                expected=expected, got=got, with_value=with_value, extra=extra
+            ),
             caused_by=caused_by,
             warning=warning,
             skip_error_log=skip_error_log,
@@ -1300,7 +1329,134 @@ class Loggy:
             self.warning(warning)
 
         return self._log_and_return_astro_error(
-            error=SupportError(feature=feature, reason=reason, extra=extra),
+            error=SupportError(
+                feature=feature, reason=reason, extra=extra, caused_by=caused_by
+            ),
+            caused_by=caused_by,
+            warning=warning,
+            skip_error_log=skip_error_log,
+        )
+
+    def CreationError(
+        self,
+        *,
+        object_type: type | str,
+        reason: str | None = None,
+        caused_by: AstroError | Exception | None = None,
+        warning: str | None = None,
+        skip_error_log: bool = False,
+        **extra: Any,
+    ) -> CreationError:
+        """Creates, logs, and returns a CreationError.
+
+        Args:
+            object_type (type | str): The type of object that failed to be created.
+            reason (str | None, optional): The reason why the creation failed. Defaults to None.
+            caused_by (AstroError | Exception | None, optional): The error to wrap. Defaults to None.
+            warning (str | None, optional): An optional warning message to log before the error. Defaults to None.
+            skip_error_log (bool, optional): If True, logging is skipped. Defaults to False.
+            extra (Any, optional): Additional details to include in the log.
+
+        Returns:
+            CreationError: The created error instance.
+        """
+        if warning is not None:
+            self.warning(warning)
+
+        return self._log_and_return_astro_error(
+            error=CreationError(
+                object_type=object_type, reason=reason, extra=extra, caused_by=caused_by
+            ),
+            caused_by=caused_by,
+            warning=warning,
+            skip_error_log=skip_error_log,
+        )
+
+    def SQLIntegrityError(
+        self,
+        *,
+        operation: str,
+        reason: str | None = None,
+        database: str | None = None,
+        table: str
+        | type[ImmutableRecord[Any]]
+        | Sequence[type[ImmutableRecord[Any]]]
+        | None = None,
+        caused_by: AstroError | Exception | None = None,
+        warning: str | None = None,
+        skip_error_log: bool = False,
+        **extra: Any,
+    ) -> SQLIntegrityError:
+        """Creates, logs, and returns a DatabaseIntegrityError.
+
+        Args:
+            operation (str): The database operation that failed.
+            reason (str | None, optional): The reason why the operation failed. Defaults to None.
+            database (str | None, optional): The name of the database involved. Defaults to None.
+            table (str | type[ImmutableRecord[Any]] | Sequence[type[ImmutableRecord[Any]]] | None, optional): The name of the table involved. Defaults to None.
+            caused_by (AstroError | Exception | None, optional): The error to wrap. Defaults to None.
+            warning (str | None, optional): An optional warning message to log before the error. Defaults to None.
+            skip_error_log (bool, optional): If True, logging is skipped. Defaults to False.
+            extra (Any, optional): Additional details to include in the log.
+        Returns:
+            SQLIntegrityError: The created error instance.
+        """
+        if warning is not None:
+            self.warning(warning)
+
+        return self._log_and_return_astro_error(
+            error=SQLIntegrityError(
+                operation=operation,
+                reason=reason,
+                database=database,
+                table=table,
+                extra=extra,
+            ),
+            caused_by=caused_by,
+            warning=warning,
+            skip_error_log=skip_error_log,
+        )
+
+    def SQLRetrievalError(
+        self,
+        *,
+        operation: str,
+        reason: str | None = None,
+        database: str | None = None,
+        table: str
+        | type[ImmutableRecord[Any]]
+        | Sequence[type[ImmutableRecord[Any]]]
+        | None = None,
+        caused_by: AstroError | Exception | None = None,
+        warning: str | None = None,
+        skip_error_log: bool = False,
+        **extra: Any,
+    ) -> SQLRetrievalError:
+        """Creates, logs, and returns a SQLRetrievalError.
+
+        Args:
+            operation (str): The database operation that failed.
+            reason (str | None, optional): The reason why the operation failed. Defaults to None.
+            database (str | None, optional): The name of the database involved. Defaults to None.
+            table (str | type[ImmutableRecord[Any]] | Sequence[type[ImmutableRecord[Any]]] | None, optional): The name of the table involved. Defaults to None.
+            caused_by (AstroError | Exception | None, optional): The error to wrap. Defaults to None.
+            warning (str | None, optional): An optional warning message to log before the error. Defaults to None.
+            skip_error_log (bool, optional): If True, logging is skipped. Defaults to False.
+            extra (Any, optional): Additional details to include in the log.
+        Returns:
+            SQLRetrievalError: The created error instance.
+        """
+        if warning is not None:
+            self.warning(warning)
+
+        return self._log_and_return_astro_error(
+            error=SQLRetrievalError(
+                operation=operation,
+                reason=reason,
+                database=database,
+                table=table,
+                extra=extra,
+            ),
             caused_by=caused_by,
             warning=warning,
             skip_error_log=skip_error_log,
@@ -1372,9 +1528,9 @@ setup_logging()
 if __name__ == "__main__":
     from pathlib import Path
 
-    from astro.paths import _LOG_DIR
+    from astro.paths import LOG_DIR
 
-    print(_LOG_DIR)
+    print(LOG_DIR)
     main_logger = get_loggy(__file__)
     util_logger = get_loggy(Path(__file__).parent / "util.py")
 

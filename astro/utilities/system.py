@@ -538,7 +538,7 @@ class PythonEnvironmentDetails(BaseModel):
     potential_issues: list[str] = Field(default_factory=list)
 
 
-def get_python_environment_details() -> PythonEnvironmentDetails:
+def get_python_details() -> PythonEnvironmentDetails:
     """
     Detect comprehensive Python environment information.
 
@@ -621,7 +621,7 @@ if __name__ == "__main__":
     from astro.utilities.display import rprint
 
     platform_info = get_platform_details()
-    python_info = get_python_environment_details()
+    python_info = get_python_details()
 
     rprint(platform_info)
     rprint(python_info)

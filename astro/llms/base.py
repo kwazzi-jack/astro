@@ -31,6 +31,7 @@ from langchain_ollama import ChatOllama
 from langchain_openai.chat_models import ChatOpenAI
 from pydantic import (
     BaseModel,
+    field_validator,
 )
 
 from astro.loggings import get_loggy
@@ -38,11 +39,10 @@ from astro.typings import (
     ModelName,
     ModelProvider,
     RecordableModel,
-    _available_provider_model_options,
-    _count_pydantic_fields,
-    _model_name_options,
-    _model_provider_options,
-    _type_name,
+    available_provider_model_options,
+    count_pydantic_fields,
+    model_name_options,
+    model_provider_options,
 )
 from astro.utilities.security import get_secret_key
 
@@ -67,8 +67,8 @@ def _available_models_message(
     message = ""
     if recommendations is not None:
         message += "Available providers with recommendations: "
-        message += f"{_model_provider_options(recommendations)}\n"
-    message += f"Available models: {_model_name_options()}"
+        message += f"{model_provider_options(recommendations)}\n"
+    message += f"Available models: {model_name_options()}"
     return message
 
 
@@ -92,6 +92,34 @@ class LLMConfig(RecordableModel, frozen=True):
     gpu_count: int | None = None
     thread_count: int | None = None
     keep_alive: bool = False
+
+    @field_validator("model_name", mode="before")
+    @classmethod
+    def _validate_model_name(cls, value: str | ModelName) -> ModelName:
+        """Ensure model_name is always a ModelName enum, converting from string if needed."""
+        if isinstance(value, str):
+            if not ModelName.supports(value):
+                raise ValueError(f"Invalid model name: {value}")
+            return ModelName(value)
+        elif isinstance(value, ModelName):
+            return value
+        else:
+            raise TypeError(f"model_name must be str or ModelName, got {type(value)}")
+
+    @field_validator("model_provider", mode="before")
+    @classmethod
+    def _validate_model_provider(cls, value: str | ModelProvider) -> ModelProvider:
+        """Ensure model_provider is always a ModelProvider enum, converting from string if needed."""
+        if isinstance(value, str):
+            if not ModelProvider.supports(value):
+                raise ValueError(f"Invalid model provider: {value}")
+            return ModelProvider(value)
+        elif isinstance(value, ModelProvider):
+            return value
+        else:
+            raise TypeError(
+                f"model_provider must be str or ModelProvider, got {type(value)}"
+            )
 
     @classmethod
     def _handle_identifier_only(
@@ -126,7 +154,7 @@ class LLMConfig(RecordableModel, frozen=True):
                 if recommendations is None:
                     raise loggy.ValueError(
                         "No recommendations for any providers. "
-                        f"Please specify a model name directly: {_model_name_options()}",
+                        f"Please specify a model name directly: {model_name_options()}",
                         identifier=identifier,
                     )
                 elif identifier not in recommendations:
@@ -152,7 +180,7 @@ class LLMConfig(RecordableModel, frozen=True):
             if recommendations is None:
                 raise loggy.ValueError(
                     "No recommendations for any providers. "
-                    f"Please specify a model name directly: {_model_name_options()}",
+                    f"Please specify a model name directly: {model_name_options()}",
                     identifier=identifier,
                 )
             elif identifier not in recommendations:
@@ -192,7 +220,7 @@ class LLMConfig(RecordableModel, frozen=True):
             # Check if string is actually a provider name (common mistake)
             if ModelProvider.supports(identifier):
                 got_provider = ModelProvider(identifier)
-                got_models_str = _available_provider_model_options(got_provider)
+                got_models_str = available_provider_model_options(got_provider)
                 raise loggy.ValueError(
                     "Parsing model name with provider failed since "
                     f"identifier is model provider: '{identifier}'. ",
@@ -209,7 +237,7 @@ class LLMConfig(RecordableModel, frozen=True):
             if not ModelName.supports(identifier):
                 raise loggy.ValueError(
                     f"Model '{identifier}' is not supported by Astro. "
-                    f"Please specify a model name: {_model_name_options()}"
+                    f"Please specify a model name: {model_name_options()}"
                 )
 
             model_name = ModelName(identifier)
@@ -319,7 +347,7 @@ class LLMConfig(RecordableModel, frozen=True):
 
     @overload
     @classmethod
-    def for_conversational(
+    def for_chat(
         cls,
         identifier: str | ModelName | ModelProvider,
         **overrides: Any,
@@ -327,24 +355,24 @@ class LLMConfig(RecordableModel, frozen=True):
 
     @overload
     @classmethod
-    def for_conversational(
+    def for_chat(
         cls,
         identifier: str | ModelName,
         provider: str | ModelProvider,
         **overrides: Any,
     ) -> "LLMConfig": ...
 
-    @overload
-    @classmethod
-    def for_conversational(
-        cls,
-        identifier: str | ModelName | ModelProvider,
-        provider: None = None,
-        **overrides: Any,
-    ) -> "LLMConfig": ...
+    # @overload
+    # @classmethod
+    # def for_conversational(
+    #     cls,
+    #     identifier: str | ModelName | ModelProvider,
+    #     provider: None = None,
+    #     **overrides: Any,
+    # ) -> "LLMConfig": ...
 
     @classmethod
-    def for_conversational(
+    def for_chat(
         cls,
         identifier: str | ModelName | ModelProvider,
         provider: str | ModelProvider | None = None,
@@ -406,7 +434,7 @@ class LLMConfig(RecordableModel, frozen=True):
         return cls(model_name=model_name, model_provider=model_name.provider, **merged)
 
 
-def create_chat_model(llm_config: LLMConfig) -> ChatModel:
+def create_llm_model(llm_config: LLMConfig) -> ChatModel:
     """Create a chat model instance based on the specified provider and configuration.
 
     This factory function creates and configures chat model instances from different
@@ -448,6 +476,8 @@ def create_chat_model(llm_config: LLMConfig) -> ChatModel:
         >>> # Streaming enabled for any provider
         >>> model = create_chat_model("openai::gpt-4o-mini", streaming=True)
     """
+    if True:
+        print("Hello World")
     loggy.debug("Creating new chat model")
     # Validate input
     if not isinstance(llm_config, LLMConfig):
@@ -475,7 +505,7 @@ def create_chat_model(llm_config: LLMConfig) -> ChatModel:
                 model=llm_config.model_name,
                 temperature=llm_config.temperature,
                 top_p=llm_config.top_p,
-                max_completion_tokens=llm_config.max_tokens,
+                max_completion_tokens=llm_config.max_tokens,  # pyright: ignore[reportCallIssue]
                 frequency_penalty=llm_config.frequency_penalty,
                 presence_penalty=llm_config.presence_penalty,
                 streaming=llm_config.streaming,
@@ -610,14 +640,14 @@ def create_structured_model(
         )
 
     # No fields present
-    if _count_pydantic_fields(output_schema) == 0:
+    if count_pydantic_fields(output_schema) == 0:
         loggy.warning(
             f"Output schema {output_schema.__name__} has "
             "no fields to be used in structured output"
         )
 
     loggy.debug(f"Creating model from LLMConfig {llm_config.secret_uid!r}")
-    llm = create_chat_model(llm_config)
+    llm = create_llm_model(llm_config)
 
     # Return chat model bound to provided output schema
     loggy.debug(
@@ -626,7 +656,7 @@ def create_structured_model(
     return llm.with_structured_output(schema=output_schema, include_raw=include_raw)
 
 
-def create_conversational_model(
+def create_chat_model(
     identifier: str | ModelName | ModelProvider,
     provider: str | ModelProvider | None = None,
     **overrides: Any,
@@ -640,18 +670,18 @@ def create_conversational_model(
         ChatModel: Configured chat model instance optimized for conversation
     """
     loggy.info(f"Creating conversation model with {identifier!r}")
-    config = LLMConfig.for_conversational(identifier, provider=provider, **overrides)
+    config = LLMConfig.for_chat(identifier, provider=provider, **overrides)
 
     loggy.debug("Config created. Creating model from config")
-    return create_chat_model(config), config
+    return create_llm_model(config), config
 
 
 if __name__ == "__main__":
-    model_1 = LLMConfig.for_conversational("ollama")
-    model_2 = LLMConfig.for_conversational("openai")
+    model_1 = LLMConfig.for_chat("ollama")
+    model_2 = LLMConfig.for_chat("openai")
     model_3 = model_1.model_copy(deep=True)
-    model_4 = LLMConfig.for_conversational("ollama")
-    model_5 = LLMConfig.for_conversational("openai")
+    model_4 = LLMConfig.for_chat("ollama")
+    model_5 = LLMConfig.for_chat("openai")
 
     test_pairs = [
         (None, None),  # No input
@@ -673,7 +703,7 @@ if __name__ == "__main__":
 
     for identifier, provider in test_pairs:
         try:
-            LLMConfig.for_conversational(identifier=identifier, provider=provider)
+            LLMConfig.for_chat(identifier=identifier, provider=provider)
         except Exception:
             pass
 

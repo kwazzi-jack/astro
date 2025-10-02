@@ -8,10 +8,10 @@ from astro.typings import (
     PathDict,
     RecordableModel,
     RecordableModelType,
-    _path_dict_to_str_dict,
-    _str_dict_to_path_dict,
-    _type_name,
     options_to_str,
+    path_dict_to_str_dict,
+    str_dict_to_path_dict,
+    type_name,
 )
 
 # Global logger variable
@@ -268,8 +268,8 @@ class ModelFileStore(Generic[RecordableModelType]):
         ):
             raise loggy.ExpectedVariableType(
                 var_name="model_type",
-                got=model_type,
                 expected=RecordableModel,
+                got=model_type,
             )
 
         # Attributes
@@ -328,7 +328,7 @@ class ModelFileStore(Generic[RecordableModelType]):
         loggy.debug(f"Saving index to file: {self.index_file}")
 
         # Convert path dictionary to strings (serialiazable)
-        str_dict = _path_dict_to_str_dict(self._index_map)
+        str_dict = path_dict_to_str_dict(self._index_map)
 
         try:
             # Open index file and dumpy
@@ -365,7 +365,7 @@ class ModelFileStore(Generic[RecordableModelType]):
                 str_dict = json.load(file)
 
             # Convert string dictionary to path dictionary
-            path_dict = _str_dict_to_path_dict(str_dict)
+            path_dict = str_dict_to_path_dict(str_dict)
 
             # Remove entry if no file
             return {key: value for key, value in path_dict.items() if value.exists()}
@@ -391,14 +391,12 @@ class ModelFileStore(Generic[RecordableModelType]):
             `IOError`: If an error occurs while saving the object to disk.
         """
         loggy = _get_loggy()
-        loggy.debug(f"Saving object of type {_type_name(obj)} with UID: {obj.uid}")
+        loggy.debug(f"Saving object of type {type_name(obj)} with UID: {obj.uid}")
 
         # Input type validation
         if not isinstance(obj, self.model_type):
             raise loggy.ExpectedVariableType(
-                var_name="obj",
-                got=type(obj),
-                expected=self.model_type,
+                var_name="obj", expected=self.model_type, got=type(obj), with_value=obj
             )
 
         try:
@@ -413,7 +411,7 @@ class ModelFileStore(Generic[RecordableModelType]):
             # An error occurred - propagate up
             raise loggy.SaveError(
                 path_or_uid=obj.uid,
-                obj_to_save=_type_name(obj),
+                obj_to_save=type_name(obj),
                 save_to="model file",
                 caused_by=error,
             )
@@ -580,8 +578,9 @@ class ModelFileStore(Generic[RecordableModelType]):
         if not isinstance(key_or_obj, (str, self.model_type)):
             raise loggy.ExpectedVariableType(
                 var_name="key_or_obj",
-                got=type(key_or_obj),
                 expected=(str, self.model_type),
+                got=type(key_or_obj),
+                with_value=key_or_obj,
             )
 
         # Return if key or UID has associated entry
@@ -635,7 +634,10 @@ class ModelFileStore(Generic[RecordableModelType]):
         # Input type validation
         if not isinstance(obj, self.model_type):
             raise loggy.ExpectedVariableType(
-                var_name="obj", got=type(obj), expected=self.model_type
+                var_name="obj",
+                expected=self.model_type,
+                got=type(obj),
+                with_value=obj,
             )
 
         # Create file path based on input object
@@ -667,8 +669,9 @@ class ModelFileStore(Generic[RecordableModelType]):
         if not isinstance(key_or_obj, (str, self.model_type)):
             raise loggy.ExpectedVariableType(
                 var_name="key_or_obj",
-                got=type(key_or_obj),
                 expected=(str, self.model_type),
+                got=type(key_or_obj),
+                with_value=key_or_obj,
             )
 
         # Delete entry associated with key or UID
@@ -745,12 +748,13 @@ class ModelFileStore(Generic[RecordableModelType]):
 # Global path variables - initialized by setup_paths()
 _HOME_DIR: Path | None = None
 _ASTRO_DIR: Path | None = None
-_INSTALL_HOME_DIR: Path | None = None
 
-_LOG_DIR: Path | None = None
-_BASE_SECRETS_PATH: Path | None = None
+LOG_DIR: Path | None = None
+SECRETS_PATH: Path | None = None
 _STATE_DIR: Path | None = None
 _STORES_DIR: Path | None = None
+_DATA_DIR: Path | None = None
+REPOSITORY_DIR: Path | None = None
 
 # Paths setup flag
 _PATH_SETUP_DONE = False
@@ -765,10 +769,12 @@ def setup_paths():
     global \
         _HOME_DIR, \
         _ASTRO_DIR, \
-        _LOG_DIR, \
-        _BASE_SECRETS_PATH, \
+        LOG_DIR, \
+        SECRETS_PATH, \
         _STATE_DIR, \
         _STORES_DIR, \
+        _DATA_DIR, \
+        REPOSITORY_DIR, \
         _PATH_SETUP_DONE
 
     if _PATH_SETUP_DONE:
@@ -781,11 +787,11 @@ def setup_paths():
         _ASTRO_DIR.mkdir(exist_ok=True)
 
         # Path for logs
-        _LOG_DIR = _ASTRO_DIR / "logs"
-        _LOG_DIR.mkdir(exist_ok=True)
+        LOG_DIR = _ASTRO_DIR / "logs"
+        LOG_DIR.mkdir(exist_ok=True)
 
         # Path for configs
-        _BASE_SECRETS_PATH = _ASTRO_DIR / ".secrets"
+        SECRETS_PATH = _ASTRO_DIR / ".secrets"
 
         # State and store directories
         _STATE_DIR = _ASTRO_DIR / "state"
@@ -794,12 +800,33 @@ def setup_paths():
         _STORES_DIR = _STATE_DIR / "stores"
         _STORES_DIR.mkdir(exist_ok=True)
 
+        # Data and repository directory
+        _DATA_DIR = _ASTRO_DIR / "data"
+        _DATA_DIR.mkdir(exist_ok=True)
+
+        REPOSITORY_DIR = _DATA_DIR / "repository"
+        REPOSITORY_DIR.mkdir(exist_ok=True)
+
     # Something went wrong when setting up paths
     except Exception as error:  # NOTE - Non-loggy errors that occur before logger setup
         raise IOError("Error occurred while setting up paths") from error
 
     # Flag that paths are setup
     _PATH_SETUP_DONE = True
+
+
+def get_stores_dir() -> Path:
+    """Get the stores directory path.
+
+    Returns:
+        Path: The stores directory path
+
+    Raises:
+        RuntimeError: If paths have not been setup yet
+    """
+    if not _PATH_SETUP_DONE or _STORES_DIR is None:
+        raise RuntimeError("Paths not initialized. Call setup_paths() first.")
+    return _STORES_DIR
 
 
 # Useful type aliases
@@ -876,7 +903,7 @@ def _is_store_dir(dir_path: Path) -> bool:
     # Input type validation
     if not isinstance(dir_path, Path):
         raise loggy.ExpectedVariableType(
-            var_name="dir_path", got=type(dir_path), expected=Path
+            var_name="dir_path", expected=Path, got=type(dir_path), with_value=dir_path
         )
 
     # If not in white-list -> False
@@ -1051,8 +1078,8 @@ def get_model_file_store(model_type: type[RecordableModel]) -> ModelFileStore:
     if not isinstance(model_type, type) or not issubclass(model_type, RecordableModel):
         raise loggy.ExpectedVariableType(
             var_name="model_type",
-            got=model_type,
             expected=RecordableModel,
+            got=model_type,
         )
 
     # Extract name
@@ -1083,7 +1110,10 @@ def save_model_to_store(model: RecordableModel):
     # Input type validation
     if not isinstance(model, RecordableModel):
         raise loggy.ExpectedVariableType(
-            var_name="model_file", got=type(model), expected=RecordableModel
+            var_name="model_file",
+            expected=RecordableModel,
+            got=type(model),
+            with_value=model,
         )
 
     # Not a valid model file to store
@@ -1249,8 +1279,8 @@ def clear_model_file_store(*model_types: type[RecordableModel]):
         ):
             raise loggy.ExpectedElementTypeError(
                 collection_var_name="model_types",
-                got=type(model_type),
                 expected=type[RecordableModel],
+                got=model_type,
                 index_or_key=i,
             )
 
@@ -1304,7 +1334,7 @@ if __name__ == "__main__":
     print("=== Path Setup Test ===")
     print(f"HOME_DIR: {_HOME_DIR}")
     print(f"ASTRO_DIR: {_ASTRO_DIR}")
-    print(f"LOG_DIR: {_LOG_DIR}")
+    print(f"LOG_DIR: {LOG_DIR}")
     print(f"STORES_DIR: {_STORES_DIR}")
     print(f"Path setup done: {_PATH_SETUP_DONE}")
 
@@ -1320,7 +1350,7 @@ if __name__ == "__main__":
     from astro.llms import LLMConfig
 
     # Create a test LLMConfig instance
-    test_config = LLMConfig.for_conversational(identifier="ollama")
+    test_config = LLMConfig.for_chat(identifier="ollama")
     print(f"Created test LLMConfig: {test_config.uid}")
 
     # Save to store
@@ -1330,7 +1360,7 @@ if __name__ == "__main__":
     # Load from store
     loaded_config = load_model_from_store(test_config.uid)
     print(f"Loaded LLMConfig from store: {loaded_config.uid}")
-    print(f"Model names match: {test_config.model_name == _type_name(loaded_config)}")
+    print(f"Model names match: {test_config.model_name == type_name(loaded_config)}")
 
     # Test store clearing
     print(f"Store length before clear: {len(get_model_file_store(LLMConfig))}")

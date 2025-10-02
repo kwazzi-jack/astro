@@ -38,8 +38,7 @@ from astro.typings import (
     ImmutableRecordType,
     RecordableModel,
     RecordableModelType,
-    RecordConverter,
-    _type_name,
+    type_name,
 )
 from astro.utilities.timing import get_datetime_now
 
@@ -83,8 +82,8 @@ class Store(Generic[RecordableModelType, ImmutableRecordType]):
         ):
             raise ExpectedVariableType(
                 var_name="model_type",
-                got=model_type,
                 expected=RecordableModel,
+                got=model_type,
             )
 
         if not (
@@ -92,8 +91,8 @@ class Store(Generic[RecordableModelType, ImmutableRecordType]):
         ):
             raise ExpectedVariableType(
                 var_name="record_type",
-                got=record_type,
                 expected=ImmutableRecord,
+                got=record_type,
             )
 
         # Validate that record_type implements RecordConverter protocol methods
@@ -101,7 +100,7 @@ class Store(Generic[RecordableModelType, ImmutableRecordType]):
             hasattr(record_type, "from_model") and hasattr(record_type, "to_model")
         ):
             raise ValueError(
-                f"Record type {_type_name(record_type)} must implement `RecordConverter` protocol "
+                f"Record type {type_name(record_type)} must implement `RecordConverter` protocol "
                 f"(`from_model` and `to_model` methods)"
             )
 
@@ -133,7 +132,7 @@ class Store(Generic[RecordableModelType, ImmutableRecordType]):
         self._shutdown_event = asyncio.Event()
         self._last_flush = get_datetime_now()
 
-        _logger.info(f"Store `{self._name}` initialized for {_type_name(model_type)}")
+        _logger.info(f"Store `{self._name}` initialized for {type_name(model_type)}")
 
     @property
     def model_type(self) -> type[RecordableModelType]:
@@ -168,8 +167,9 @@ class Store(Generic[RecordableModelType, ImmutableRecordType]):
         else:
             raise ExpectedVariableType(
                 var_name="key_or_model",
-                got=type(key_or_model),
                 expected=(str, self._model_type),
+                got=type(key_or_model),
+                with_value=key_or_model,
             )
 
         with self._lock:
@@ -730,8 +730,8 @@ if __name__ == "__main__":
 
         # Create some LLMConfig instances
         console.print("\n🏗️  Creating LLMConfig instances...")
-        config1 = LLMConfig.for_conversational("openai")
-        config2 = LLMConfig.for_conversational("ollama")
+        config1 = LLMConfig.for_chat("openai")
+        config2 = LLMConfig.for_chat("ollama")
         config3 = config1.model_copy(update={"temperature": 0.5}, deep=True)
 
         # Create a table for config details
@@ -809,7 +809,7 @@ if __name__ == "__main__":
 
         # Test manual flush
         console.print("\n⚡ Testing manual flush...")
-        config4 = LLMConfig.for_conversational("anthropic")
+        config4 = LLMConfig.for_chat("anthropic")
         store.add(config4)
 
         console.print(
@@ -887,9 +887,9 @@ if __name__ == "__main__":
         # 3. Create some LLMConfig instances to work with
         console.print("\n🏗️  Creating LLMConfig instances...")
         configs = [
-            LLMConfig.for_conversational("openai"),
-            LLMConfig.for_conversational("ollama"),
-            LLMConfig.for_conversational("anthropic"),
+            LLMConfig.for_chat("openai"),
+            LLMConfig.for_chat("ollama"),
+            LLMConfig.for_chat("anthropic"),
         ]
 
         # 4. Add configs to the store, making them "dirty"
@@ -910,7 +910,7 @@ if __name__ == "__main__":
 
         # 6. Test manual flush
         console.print("\n⚡ Testing manual flush...")
-        new_config = LLMConfig.for_conversational("openai", temperature=0.9)
+        new_config = LLMConfig.for_chat("openai", temperature=0.9)
         store.add(new_config)
         console.print(
             f"📈 Dirty objects before flush: [red]{store.get_dirty_count()}[/red]"

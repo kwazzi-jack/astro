@@ -1,1 +1,1 @@
-Good {current_period}, how may I assist?
+Good {day_period}, how may I assist?

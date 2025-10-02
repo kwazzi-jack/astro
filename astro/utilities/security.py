@@ -8,7 +8,7 @@ from dotenv import dotenv_values
 from pydantic import SecretStr
 
 from astro.loggings.base import get_loggy
-from astro.paths import _BASE_SECRETS_PATH
+from astro.paths import SECRETS_PATH
 
 loggy = get_loggy("astro.utilities.security")
 
@@ -45,7 +45,7 @@ def files_differ(file1: str | Path, file2: str | Path, chunk_size: int = -1) -> 
 
 def get_secret_key(key: str) -> SecretStr:
     # Input validation
-    if _BASE_SECRETS_PATH is None:
+    if SECRETS_PATH is None:
         raise loggy.FileNotFoundError(
             "Secrets file has not been set. Ensure one is present at `$ASTRO_HOME`. "
             "#TODO - Add functionality to add keys dynamically"
@@ -54,13 +54,13 @@ def get_secret_key(key: str) -> SecretStr:
     if not isinstance(key, str):
         raise
 
-    if not _BASE_SECRETS_PATH.exists():
+    if not SECRETS_PATH.exists():
         raise loggy.FileNotFoundError(
             "Secrets file cannot be found. Ensure one is present at `$ASTRO_HOME`. "
             "#TODO - Add functionality to add keys dynamically"
         )
 
-    secrets_dict = dotenv_values(_BASE_SECRETS_PATH)
+    secrets_dict = dotenv_values(SECRETS_PATH)
     if len(secrets_dict) == 0:
         raise ValueError("Secrets file is empty")
 

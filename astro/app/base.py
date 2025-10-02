@@ -7,7 +7,7 @@ from pydantic import ValidationError
 from streamlit import runtime
 from streamlit.web import cli as stcli
 
-from astro.agents.chat import AstroChatAgent
+from astro.agents.chat import ChatAgent
 from astro.app.config import DisplayTheme, StreamlitConfig
 from astro.llms.base import ModelName, ModelProvider
 from astro.loggings.base import LogLevel, get_loggy
@@ -67,7 +67,7 @@ def run_streamlit_app():
             or st.session_state.chat_agent is None
         ):
             try:
-                st.session_state.chat_agent = AstroChatAgent(
+                st.session_state.chat_agent = ChatAgent(
                     identifier=selected_model, provider=selected_provider
                 )
                 st.session_state.current_provider = selected_provider
