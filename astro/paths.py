@@ -7,7 +7,7 @@ from typing import Any, Generic, TypeAlias
 from astro.typings import (
     PathDict,
     RecordableModel,
-    RecordableModelType,
+    RecordableType,
     options_to_str,
     path_dict_to_str_dict,
     str_dict_to_path_dict,
@@ -177,11 +177,10 @@ def get_available_log_files(log_dir: Path, pattern: str = "*.jsonl") -> list[Pat
         )
 
 
-def read_markdown_file(markdown_file_path: str | Path) -> str:
+def read_markdown_file(markdown_file_path: Path) -> str:
     """Read and return the contents of a markdown file.
     Args:
-        markdown_file_path (str | Path): Path to the markdown file to read.
-            Can be either a string path or a Path object.
+        markdown_file_path (Path): Path to the markdown file to read.
     Returns:
         str: The contents of the markdown file with leading and trailing
             whitespace stripped.
@@ -192,15 +191,10 @@ def read_markdown_file(markdown_file_path: str | Path) -> str:
     loggy = _get_loggy()
     loggy.debug(f"Reading markdown file: {markdown_file_path}")
 
-    # If string file path, convert to Path
-    if isinstance(markdown_file_path, str):
-        markdown_file_path = Path(markdown_file_path)
-        loggy.debug(f"Converted string path to Path object: {markdown_file_path}")
-
     # Validate file exists
     if not markdown_file_path.exists():
         raise loggy.FileNotFoundError(
-            f"File `{markdown_file_path}` does not exist", file_path=markdown_file_path
+            f"File {markdown_file_path} does not exist", file_path=markdown_file_path
         )
 
     # Return contents of markdown file
@@ -220,7 +214,7 @@ def read_markdown_file(markdown_file_path: str | Path) -> str:
         )
 
 
-class ModelFileStore(Generic[RecordableModelType]):
+class ModelFileStore(Generic[RecordableType]):
     """Index and manage file paths for traceable model objects in a directory.
 
     Provides a persistent mapping between unique model identifiers and file paths
@@ -229,29 +223,29 @@ class ModelFileStore(Generic[RecordableModelType]):
     Ensures type safety for all operations and validates model types at runtime.
 
     Attributes:
-        `name` (`str`): Name of the root directory used for indexing.
-        `root_dir` (`Path`): Root directory where model files and index are stored.
-        `model_type` (`type(TraceableModel)`): Type of model managed by this indexer (must be `TraceableModel`).
-        `index_file` (`Path`): Path to the index file storing the mapping.
+        name (str): Name of the root directory used for indexing.
+        root_dir (Path): Root directory where model files and index are stored.
+        model_type (type(TraceableModel)): Type of model managed by this indexer (must be TraceableModel).
+        index_file (Path): Path to the index file storing the mapping.
 
     Args:
-        `root_dir` (`Path`): Directory where model files and the index file are stored.
-        `model_type` (`type(TraceableModel)`): Type of model to be indexed. Must be a subclass of `TraceableModel`.
+        root_dir (Path): Directory where model files and the index file are stored.
+        model_type (type(TraceableModel)): Type of model to be indexed. Must be a subclass of TraceableModel.
     """
 
-    def __init__(self, root_dir: Path, model_type: type[RecordableModelType]):
-        """Initialize the `ModelFileStore` with a root directory and model type.
+    def __init__(self, root_dir: Path, model_type: type[RecordableType]):
+        """Initialize the ModelFileStore with a root directory and model type.
 
         Creates the root directory if it does not exist, validates the model type,
         and loads or initializes the index file.
 
         Args:
-            `root_dir`: Directory where model files and the index file are stored.
-            `model_type`: Type of model to be indexed. Must be a subclass of `TraceableModel`.
+            root_dir: Directory where model files and the index file are stored.
+            model_type: Type of model to be indexed. Must be a subclass of TraceableModel.
 
         Raises:
-            `ValueError`: If model_type is not a subclass of `TraceableModel`.
-            `IOError`: If `ModelFileStore` encounters an error while saving or loading the index file.
+            ValueError: If model_type is not a subclass of TraceableModel.
+            IOError: If ModelFileStore encounters an error while saving or loading the index file.
         """
         loggy = _get_loggy()
         loggy.debug(
@@ -262,7 +256,7 @@ class ModelFileStore(Generic[RecordableModelType]):
         root_dir.mkdir(exist_ok=True)
         loggy.debug(f"Created/verified directory: {root_dir}")
 
-        # Validate `model_type` is subclass of `TraceableModel`
+        # Validate model_type is subclass of TraceableModel
         if not (
             isinstance(model_type, type) and issubclass(model_type, RecordableModel)
         ):
@@ -277,7 +271,7 @@ class ModelFileStore(Generic[RecordableModelType]):
         self._root_dir = root_dir
         self._model_type = model_type
         self._index_file = root_dir / "index"
-        self._index_map = {}  # type: PathDict
+        self._index_map: PathDict = {}
 
         loggy.debug(f"Set up ModelFileStore attributes for {self._name}")
 
@@ -307,8 +301,8 @@ class ModelFileStore(Generic[RecordableModelType]):
         return self._root_dir
 
     @property
-    def model_type(self) -> type[RecordableModelType]:
-        """Type of model managed by this indexer (must be `TraceableModel`)."""
+    def model_type(self) -> type[RecordableType]:
+        """Type of model managed by this indexer (must be TraceableModel)."""
         return self._model_type
 
     @property
@@ -322,7 +316,7 @@ class ModelFileStore(Generic[RecordableModelType]):
         Serializes the internal path dictionary to a JSON file for persistence.
 
         Raises:
-            `IOError`: If an error occurs while writing to the index file.
+            IOError: If an error occurs while writing to the index file.
         """
         loggy = _get_loggy()
         loggy.debug(f"Saving index to file: {self.index_file}")
@@ -350,10 +344,10 @@ class ModelFileStore(Generic[RecordableModelType]):
         Reads the index file and reconstructs the internal path dictionary.
 
         Returns:
-            `PathDict`: Dictionary mapping UIDs to file paths.
+            PathDict: Dictionary mapping UIDs to file paths.
 
         Raises:
-            `IOError`: If an error occurs while reading or parsing the index file.
+            IOError: If an error occurs while reading or parsing the index file.
         """
 
         loggy = _get_loggy()
@@ -378,17 +372,17 @@ class ModelFileStore(Generic[RecordableModelType]):
                 caused_by=error,
             )
 
-    def _save_object(self, obj: RecordableModelType):
+    def _save_object(self, obj: RecordableType):
         """Serialize and save a model object to its associated file path.
 
         Validates the object type and writes its JSON representation to disk.
 
         Args:
-            `obj`: Model object to save. Must be an instance of the configured `Model` type.
+            obj: Model object to save. Must be an instance of the configured Model type.
 
         Raises:
-            `ValueError`: If `obj` is not an instance of the configured model type.
-            `IOError`: If an error occurs while saving the object to disk.
+            ValueError: If obj is not an instance of the configured model type.
+            IOError: If an error occurs while saving the object to disk.
         """
         loggy = _get_loggy()
         loggy.debug(f"Saving object of type {type_name(obj)} with UID: {obj.uid}")
@@ -403,7 +397,7 @@ class ModelFileStore(Generic[RecordableModelType]):
             # Fetch file path based on UID
             file_path = self[obj.uid]
 
-            # Dump as json and save (requires as `TraceableModel`)
+            # Dump as json and save (requires as TraceableModel)
             with open(file_path, "w") as file:
                 json.dump(obj.model_dump(mode="json"), file)
 
@@ -416,20 +410,20 @@ class ModelFileStore(Generic[RecordableModelType]):
                 caused_by=error,
             )
 
-    def _load_object(self, key: str) -> RecordableModelType:
+    def _load_object(self, key: str) -> RecordableType:
         """Load and deserialize a model object from its associated file path.
 
         Retrieves the file path for the given key and reconstructs the model object.
 
         Args:
-            ``key`: Unique identifier for the `Model` object.
+            key: Unique identifier for the Model object.
 
         Returns:
-            `Model`: The loaded and validated `Model` object.
+            Model: The loaded and validated Model object.
 
         Raises:
-            `ValueError`: If `key` is not a string.
-            `IOError`: If an error occurs while loading or parsing the file.
+            ValueError: If key is not a string.
+            IOError: If an error occurs while loading or parsing the file.
         """
 
         loggy = _get_loggy()
@@ -464,14 +458,14 @@ class ModelFileStore(Generic[RecordableModelType]):
         Fetches the Path object mapped to the specified string key from the index.
 
         Args:
-            `key` (`str`): Unique identifier for the model object.
+            key (str): Unique identifier for the model object.
 
         Returns:
-            `Path`: The file path associated with the key.
+            Path: The file path associated with the key.
 
         Raises:
-            `ValueError`: If `key` is not a string.
-            `KeyError`: If `key` is not present in the index.
+            ValueError: If key is not a string.
+            KeyError: If key is not present in the index.
         """
         loggy = _get_loggy()
 
@@ -492,12 +486,12 @@ class ModelFileStore(Generic[RecordableModelType]):
         Assigns the specified Path value to the string key in the index and persists the change.
 
         Args:
-            `key` (`str`): Unique identifier for the model object.
-            `value` (`Path`): File path to associate with the key.
+            key (str): Unique identifier for the model object.
+            value (Path): File path to associate with the key.
 
         Raises:
-            `ValueError`: If `key` is not a string or `value` is not a Path.
-            `IOError`: If an error occurs while updating the index file.
+            ValueError: If key is not a string or value is not a Path.
+            IOError: If an error occurs while updating the index file.
         """
         loggy = _get_loggy()
 
@@ -522,12 +516,12 @@ class ModelFileStore(Generic[RecordableModelType]):
         by updating the index file.
 
         Args:
-            `key` (`str`): Unique identifier for the model object.
+            key (str): Unique identifier for the model object.
 
         Raises:
-            `ValueError`: If `key` is not a string.
-            `KeyError`: If `key` is not present in the index.
-            `IOError`: If an error occurs while deleting the file or updating the index file.
+            ValueError: If key is not a string.
+            KeyError: If key is not present in the index.
+            IOError: If an error occurs while deleting the file or updating the index file.
         """
         loggy = _get_loggy()
 
@@ -557,20 +551,20 @@ class ModelFileStore(Generic[RecordableModelType]):
         """
         return iter(self._index_map)
 
-    def __contains__(self, key_or_obj: str | RecordableModelType) -> bool:
+    def __contains__(self, key_or_obj: str | RecordableType) -> bool:
         """Check if a key or model object is present in the index.
 
         Determines whether the given string key or model object's UID exists
         in the internal index mapping. For model objects, checks the UID attribute.
 
         Args:
-            `key_or_obj` (`str | Model`): String key or model object to check for presence.
+            key_or_obj (str | Model): String key or model object to check for presence.
 
         Returns:
             True if the key or object's UID is in the index, False otherwise.
 
         Raises:
-            `ValueError`: If `key_or_obj` is not a string or an instance of the configured model type.
+            ValueError: If key_or_obj is not a string or an instance of the configured model type.
         """
         loggy = _get_loggy()
 
@@ -589,16 +583,16 @@ class ModelFileStore(Generic[RecordableModelType]):
         else:
             return key_or_obj.uid in self._index_map
 
-    def get_model(self, key: str, default: Any = None) -> RecordableModelType | Any:
+    def get_model(self, key: str, default: Any = None) -> RecordableType | Any:
         """Retrieve an object by key, with a default value if not found.
 
         Args:
-            `key` (`str`): The unique identifier for the model object.
-            `default` (`Any`, optional): The value to return if the key is not found.
-                Defaults to `None`.
+            key (str): The unique identifier for the model object.
+            default (Any, optional): The value to return if the key is not found.
+                Defaults to None.
 
         Returns:
-            `Model` | `Any`: The loaded model object if the key is found,
+            Model | Any: The loaded model object if the key is found,
             otherwise the default value.
         """
         logger = _get_loggy()
@@ -616,18 +610,18 @@ class ModelFileStore(Generic[RecordableModelType]):
         # Key not found, return default
         return default
 
-    def add_model(self, obj: RecordableModelType):
+    def add_model(self, obj: RecordableType):
         """Add a model object to the index.
 
         Generates a file path for the object based on its UID, stores the
         mapping in the index, and saves the object to disk.
 
         Args:
-            `obj` (`Model`): Model object to add to the index.
+            obj (Model): Model object to add to the index.
 
         Raises:
-            `ValueError`: If `obj` is not an instance of the configured model type.
-            `IOError`: If an error occurs while saving the object or updating the index.
+            ValueError: If obj is not an instance of the configured model type.
+            IOError: If an error occurs while saving the object or updating the index.
         """
         loggy = _get_loggy()
 
@@ -650,18 +644,18 @@ class ModelFileStore(Generic[RecordableModelType]):
         self._save_object(obj)
         self._save_index()
 
-    def remove_model(self, key_or_obj: str | RecordableModelType):
+    def remove_model(self, key_or_obj: str | RecordableType):
         """Remove a model object from the index.
 
         Deletes the file associated with the object (or key), removes the
         mapping from the index, and updates the index file.
 
         Args:
-            `key_or_obj` (`str | Model`): Key or model object to remove from the index.
+            key_or_obj (str | Model): Key or model object to remove from the index.
 
         Raises:
-            `ValueError`: If `key_or_obj` is not a string or an instance of the configured model type.
-            `IOError`: If an error occurs while deleting the file or updating the index.
+            ValueError: If key_or_obj is not a string or an instance of the configured model type.
+            IOError: If an error occurs while deleting the file or updating the index.
         """
         loggy = _get_loggy()
 
@@ -700,7 +694,7 @@ class ModelFileStore(Generic[RecordableModelType]):
         """Returns the number of items in the path index.
 
         Returns:
-            `int`: The length of the internal index map.
+            int: The length of the internal index map.
         """
         return len(self._index_map)
 
@@ -708,7 +702,7 @@ class ModelFileStore(Generic[RecordableModelType]):
         """Return a view of the keys in the index.
 
         Returns:
-            `KeysView[str]`: A view object that displays a list of all keys in the index.
+            KeysView[str]: A view object that displays a list of all keys in the index.
         """
         return self._index_map.keys()
 
@@ -716,7 +710,7 @@ class ModelFileStore(Generic[RecordableModelType]):
         """Return a view of the values in the index.
 
         Returns:
-            `ValuesView[Path]`: A view object that displays a list of all values in the index.
+            ValuesView[Path]: A view object that displays a list of all values in the index.
         """
         return self._index_map.values()
 
@@ -724,7 +718,7 @@ class ModelFileStore(Generic[RecordableModelType]):
         """Return a view of the items in the index.
 
         Returns:
-            `ItemsView[str, Path]`: A view object that displays a list of all (key, value) pairs in the index.
+            ItemsView[str, Path]: A view object that displays a list of all (key, value) pairs in the index.
         """
         return self._index_map.items()
 
@@ -732,7 +726,7 @@ class ModelFileStore(Generic[RecordableModelType]):
         """Return a user-friendly string representation of the ModelFileStore.
 
         Returns:
-            `str`: A string describing the indexer, including the model type and root directory.
+            str: A string describing the indexer, including the model type and root directory.
         """
         return f"ModelFileStore for {self.model_type.__name__} at {self.root_dir}"
 
@@ -740,7 +734,7 @@ class ModelFileStore(Generic[RecordableModelType]):
         """Return an unambiguous string representation of the ModelFileStore.
 
         Returns:
-            `str`: A string that could be used to recreate the ModelFileStore instance.
+            str: A string that could be used to recreate the ModelFileStore instance.
         """
         return f"ModelFileStore(root_dir={self.root_dir!r}, model_type={self.model_type!r})"
 
@@ -753,6 +747,7 @@ LOG_DIR: Path | None = None
 SECRETS_PATH: Path | None = None
 _STATE_DIR: Path | None = None
 _STORES_DIR: Path | None = None
+_CONVERSATIONS_DIR: Path | None = None
 _DATA_DIR: Path | None = None
 REPOSITORY_DIR: Path | None = None
 
@@ -800,6 +795,10 @@ def setup_paths():
         _STORES_DIR = _STATE_DIR / "stores"
         _STORES_DIR.mkdir(exist_ok=True)
 
+        # Conversations directory for simple local persistence
+        _CONVERSATIONS_DIR = _STATE_DIR / "conversations"
+        _CONVERSATIONS_DIR.mkdir(exist_ok=True)
+
         # Data and repository directory
         _DATA_DIR = _ASTRO_DIR / "data"
         _DATA_DIR.mkdir(exist_ok=True)
@@ -829,9 +828,37 @@ def get_stores_dir() -> Path:
     return _STORES_DIR
 
 
+def get_state_dir() -> Path:
+    """Get the state directory path where runtime state is kept.
+
+    Returns:
+        Path: The state directory path
+
+    Raises:
+        RuntimeError: If paths have not been setup yet
+    """
+    if not _PATH_SETUP_DONE or _STATE_DIR is None:
+        raise RuntimeError("Paths not initialized. Call setup_paths() first.")
+    return _STATE_DIR
+
+
+def get_conversations_dir() -> Path:
+    """Get the conversations directory used for simple chat persistence.
+
+    Returns:
+        Path: The conversations directory path
+
+    Raises:
+        RuntimeError: If paths have not been setup yet
+    """
+    if not _PATH_SETUP_DONE or _CONVERSATIONS_DIR is None:
+        raise RuntimeError("Paths not initialized. Call setup_paths() first.")
+    return _CONVERSATIONS_DIR
+
+
 # Useful type aliases
 ModelTypeDict: TypeAlias = dict[str, type[RecordableModel]]
-StoreDict: TypeAlias = dict[str, ModelFileStore[RecordableModelType]]
+StoreDict: TypeAlias = dict[str, ModelFileStore[RecordableType]]
 
 # Main store white list and mapping
 _STORE_WHITE_LIST_MAP: ModelTypeDict = {}
@@ -866,10 +893,9 @@ def _load_store_white_list():
     try:
         # List of TraceableModels to white list
         # Brian - This governs which models can be stored
-        from astro.llms import LLMConfig
 
         # Create list based on above
-        _STORE_WHITE_LIST_MAP = {LLMConfig.__name__: LLMConfig}
+        _STORE_WHITE_LIST_MAP = {}
         loggy.info(
             f"Store white list loaded successfully: {list(_STORE_WHITE_LIST_MAP.keys())}"
         )
@@ -889,13 +915,13 @@ def _is_store_dir(dir_path: Path) -> bool:
     an 'index' file, indicating it is a store directory.
 
     Args:
-        `dir_path` (`Path`): The directory path to check.
+        dir_path (Path): The directory path to check.
 
     Returns:
-        `bool`: True if the directory is a valid store directory, False otherwise.
+        bool: True if the directory is a valid store directory, False otherwise.
 
     Raises:
-        `ValueError`: If `dir_path` is not a `Path` instance.
+        ValueError: If dir_path is not a Path instance.
     """
     loggy = _get_loggy()
     loggy.debug(f"Checking if directory is valid store: {dir_path}")
@@ -1060,14 +1086,14 @@ def get_model_file_store(model_type: type[RecordableModel]) -> ModelFileStore:
     type's name, and initializes a ModelFileStore in the corresponding objects subdirectory.
 
     Args:
-        `model_type` (`type[TraceableModel]`): The model type to create a store for.
-            Must be a subclass of `TraceableModel`.
+        model_type (type[TraceableModel]): The model type to create a store for.
+            Must be a subclass of TraceableModel.
 
     Returns:
-        `ModelFileStore[model_type]`: A configured ModelFileStore instance for the given model type.
+        ModelFileStore[model_type]: A configured ModelFileStore instance for the given model type.
 
     Raises:
-        `ValueError`: If `model_type` is not a subclass of `TraceableModel`.
+        ValueError: If model_type is not a subclass of TraceableModel.
     """
     loggy = _get_loggy()
     loggy.debug(
@@ -1196,8 +1222,8 @@ def remove_models_from_store(*keys: str, missing_okay: bool = False):
     """Remove models from their respective stores by UID.
 
     Args:
-        `*keys` (`str`): One or more string UIDs of models to remove from stores.
-        `missing_okay` (`bool`, optional): If True, do not raise an error if a key is not found. Defaults to False.
+        *keys (str): One or more string UIDs of models to remove from stores.
+        missing_okay (bool, optional): If True, do not raise an error if a key is not found. Defaults to False.
 
     Raises:
         # TODO - Define possible exceptions
@@ -1259,7 +1285,7 @@ def clear_model_file_store(*model_types: type[RecordableModel]):
     """Clear all entries from the specified model file stores.
 
     Args:
-        `*model_types` (type[RecordableModel]`): One or more TraceableModel types whose stores should be cleared.
+        *model_types (type[RecordableModel]): One or more TraceableModel types whose stores should be cleared.
 
     Raises:
         ValueError: If any model_type is not a subclass of TraceableModel.
@@ -1278,7 +1304,7 @@ def clear_model_file_store(*model_types: type[RecordableModel]):
             model_type, RecordableModel
         ):
             raise loggy.ExpectedElementTypeError(
-                collection_var_name="model_types",
+                structure_var_name="model_types",
                 expected=type[RecordableModel],
                 got=model_type,
                 index_or_key=i,
@@ -1329,42 +1355,3 @@ if __name__ == "__main__":
     else:
         _STORES_DIR.mkdir()
     setup_store()
-
-    # Test path setup functionality
-    print("=== Path Setup Test ===")
-    print(f"HOME_DIR: {_HOME_DIR}")
-    print(f"ASTRO_DIR: {_ASTRO_DIR}")
-    print(f"LOG_DIR: {LOG_DIR}")
-    print(f"STORES_DIR: {_STORES_DIR}")
-    print(f"Path setup done: {_PATH_SETUP_DONE}")
-
-    # Test logger functionality
-    print("\n=== Logger Test ===")
-    loggy = _get_loggy()
-    loggy.info("Testing logger functionality from paths.py")
-    print(f"Logger created: {loggy}")
-
-    # Test store functionality (if LLMConfig is available)
-    print("\n=== Store Test ===")
-
-    from astro.llms import LLMConfig
-
-    # Create a test LLMConfig instance
-    test_config = LLMConfig.for_chat(identifier="ollama")
-    print(f"Created test LLMConfig: {test_config.uid}")
-
-    # Save to store
-    save_model_to_store(test_config)
-    print("Saved LLMConfig to store")
-
-    # Load from store
-    loaded_config = load_model_from_store(test_config.uid)
-    print(f"Loaded LLMConfig from store: {loaded_config.uid}")
-    print(f"Model names match: {test_config.model_name == type_name(loaded_config)}")
-
-    # Test store clearing
-    print(f"Store length before clear: {len(get_model_file_store(LLMConfig))}")
-    # clear_model_file_store(LLMConfig)
-    print(f"Store length after clear: {len(get_model_file_store(LLMConfig))}")
-
-    print("\n=== Path and Store Test Complete ===")

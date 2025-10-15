@@ -43,8 +43,12 @@ def get_time_str(dt: datetime) -> str:
     return f"{time_base} {time_offset}"
 
 
-def get_datetime_str(dt: datetime) -> str:
-    return f"{get_time_str(dt)}, {get_date_str(dt)}"
+def get_datetime_str(dt: datetime, to_local: bool = False) -> str:
+    if to_local:
+        current_dt = datetime_to_local(dt)
+    else:
+        current_dt = dt
+    return f"{get_time_str(current_dt)}, {get_date_str(current_dt)}"
 
 
 def get_day_period_str(dt: datetime) -> str:

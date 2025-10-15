@@ -36,7 +36,7 @@ from rich.progress import Progress, SpinnerColumn, TextColumn
 from rich.prompt import Prompt
 from tqdm import tqdm
 
-from astro.llms.base import create_chat_model
+from astro.llms.base import create_llm_model
 
 # Load environment variables
 dotenv.load_dotenv()
@@ -434,7 +434,7 @@ def main(
     # Create the chat model with progress indicator
 
     try:
-        model = create_chat_model(
+        model = create_llm_model(
             name=model_name,
             temperature=temperature,
             top_p=top_p,

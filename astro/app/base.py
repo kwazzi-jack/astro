@@ -1,15 +1,22 @@
+import asyncio
 import sys
 from typing import Literal
 
 import click
 import streamlit as st
-from pydantic import ValidationError
+from pydantic_ai import (
+    AgentRunResultEvent,
+    ModelResponse,
+    PartDeltaEvent,
+    PartStartEvent,
+    TextPart,
+    TextPartDelta,
+)
 from streamlit import runtime
 from streamlit.web import cli as stcli
 
-from astro.agents.chat import ChatAgent
+from astro.agents.base import create_astro_chat
 from astro.app.config import DisplayTheme, StreamlitConfig
-from astro.llms.base import ModelName, ModelProvider
 from astro.loggings.base import LogLevel, get_loggy
 from astro.paths import get_module_dir
 
@@ -37,136 +44,57 @@ def run_streamlit_app():
 
     st.title("Astro")
 
-    # Initialize session state for agent and manager
-    if "chat_agent" not in st.session_state:
-        st.session_state.chat_agent = None
-    if "conversation_manager" not in st.session_state:
-        st.session_state.conversation_manager = ConversationManager()
+    # Initialize chat in session state to maintain conversation
+    if "chat_stream" not in st.session_state or "messages" not in st.session_state:
+        chat_stream, messages = create_astro_chat()
+        st.session_state.chat_stream = chat_stream
+        st.session_state.messages = messages
 
-    manager = st.session_state.conversation_manager
+    chat_stream = st.session_state.chat_stream
+    messages = st.session_state.messages
 
-    # Sidebar for model and conversation configuration
-    with st.sidebar:
-        st.header("Configuration")
-
-        # Provider selection
-        provider_options = [provider.value for provider in ModelProvider]
-        selected_provider = st.selectbox(
-            "Select Provider:",
-            provider_options,
-            index=provider_options.index(st.session_state.current_provider),  # pyright: ignore[reportArgumentType]
-        )
-        model_provider = ModelProvider(selected_provider)
-        model_options = model_provider.models
-
-        selected_model = st.selectbox("Select Model:", model_options)
-
-        # Initialize or update chat agent if provider changed
-        if (
-            st.session_state.current_provider != selected_provider
-            or st.session_state.chat_agent is None
-        ):
-            try:
-                st.session_state.chat_agent = ChatAgent(
-                    identifier=selected_model, provider=selected_provider
-                )
-                st.session_state.current_provider = selected_provider
-                st.success(f"Initialized {selected_provider} with {selected_model}")
-            except Exception as e:
-                st.error(f"Failed to initialize model: {e}")
-                st.session_state.chat_agent = None
-
-        st.header("Conversations")
-
-        # New Chat button
-        if st.button("New Chat", use_container_width=True, type="primary"):
-            st.session_state.conversation_counter += 1
-            new_id = str(st.session_state.conversation_counter)
-            st.session_state.conversations.append(
-                {"id": new_id, "name": f"Chat {new_id}", "messages": []}
-            )
-            st.session_state.current_conversation_id = new_id
-            st.rerun()
-
-        # Conversations list
-        for conv in st.session_state.conversations:
-            is_active = conv["id"] == st.session_state.current_conversation_id
-            col1, col2 = st.columns([5, 1])
-
-            with col1:
-                display_name = f"{conv['name']}"
-                if st.button(
-                    display_name,
-                    key=f"conv_{conv['id']}",
-                    use_container_width=True,
-                    type="primary" if is_active else "secondary",
-                ):
-                    if not is_active:
-                        st.session_state.current_conversation_id = conv["id"]
-                        st.rerun()
-
-            with col2:
-                if st.button(
-                    "🗑️",
-                    key=f"delete_{conv['id']}",
-                    help="Delete conversation",
-                    use_container_width=True,
-                ):
-                    if len(st.session_state.conversations) > 1:
-                        st.session_state.conversations = [
-                            c
-                            for c in st.session_state.conversations
-                            if c["id"] != conv["id"]
-                        ]
-                        if is_active:
-                            st.session_state.current_conversation_id = (
-                                st.session_state.conversations[0]["id"]
-                            )
-                        st.rerun()
-                    else:
-                        st.warning("Cannot delete the only conversation.")
-
-        # Clear chat button
-        if st.button("Clear Current Chat", use_container_width=True):
-            messages = get_current_conversation_messages()
-            messages.clear()
-            st.rerun()
-
-    # Main chat interface
-    if st.session_state.chat_agent is None:
-        st.warning("Please configure a model in the sidebar to start chatting.")
-        return
-
-    messages = get_current_conversation_messages()
-
-    # Display chat messages
+    # Display all messages from history
     for message in messages:
-        avatar = "🌌" if message["role"] == "assistant" else "👤"
-        with st.chat_message(message["role"], avatar=avatar):
-            st.write(message["content"])
+        if isinstance(message, ModelResponse) and len(message.parts) > 0:
+            with st.chat_message("assistant", avatar="🌌"):
+                for part in message.parts:
+                    if isinstance(part, TextPart):
+                        st.markdown(part.content)
 
     # Chat input
-    if prompt := st.chat_input("Ask Astro anything..."):
-        # Add user message to chat history
-        messages.append({"role": "user", "content": prompt})
-
+    if prompt := st.chat_input("Enter message..."):
         # Display user message
-        with st.chat_message("user", avatar="👤"):
-            st.write(prompt)
+        with st.chat_message("user"):
+            st.markdown(prompt)
 
-        # Generate assistant response
-        with st.chat_message("assistant", avatar="🌌"):
-            with st.spinner("Thinking..."):
-                try:
-                    response = st.session_state.chat_agent.act(prompt)
-                    st.write(response)
+        # Display assistant response with streaming
+        with st.chat_message("Astro", avatar="🌌"):
+            response_placeholder = st.empty()
+            full_response = ""
 
-                    # Add assistant response to chat history
-                    messages.append({"role": "assistant", "content": response})
-                except Exception as e:
-                    st.error(f"Error generating response: {e}")
-                    _logger.error(f"Chat agent error: {e}", exc_info=True)
-        st.rerun()
+            # Run async chat_stream in sync context
+            async def process_stream():
+                nonlocal full_response
+                async for event in chat_stream(prompt):
+                    # Handle text delta events for streaming display
+                    if isinstance(event, PartDeltaEvent):
+                        if isinstance(event.delta, TextPartDelta):
+                            full_response += event.delta.content_delta
+                            response_placeholder.markdown(full_response)
+
+                    if isinstance(event, PartStartEvent):
+                        if isinstance(event.part, TextPart) and len(event.part.content):
+                            full_response += event.part.content
+                            response_placeholder.markdown(full_response)
+
+                    # Handle final result
+                    elif isinstance(event, AgentRunResultEvent):
+                        if isinstance(event.result.response.parts[0], TextPart):
+                            full_response = event.result.response.parts[0].content
+                            response_placeholder.markdown(full_response)
+
+            # Execute async function in sync context
+            asyncio.run(process_stream())
 
 
 @click.command()

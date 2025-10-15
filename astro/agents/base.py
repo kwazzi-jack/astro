@@ -15,348 +15,302 @@ Dependencies:
 """
 
 # --- Internal Imports ---
+from collections.abc import AsyncIterator, Callable, Sequence
 from types import NoneType
-from typing import Any
+from typing import Any, Literal
+
+from pydantic import BaseModel
 
 # --- External Imports ---
-from langchain_core.messages import BaseMessage, HumanMessage
-from pydantic import field_serializer, field_validator
+from pydantic_ai import (
+    Agent,
+    AgentRunResultEvent,
+    AgentStreamEvent,
+    FinalResultEvent,
+    FunctionToolCallEvent,
+    FunctionToolResultEvent,
+    ModelMessage,
+    ModelResponsePartDelta,
+    ModelSettings,
+    PartDeltaEvent,
+    PartStartEvent,
+    RunContext,
+    TextPartDelta,
+    ThinkingPartDelta,
+    ToolCallPartDelta,
+    UserContent,
+)
+from pydantic_ai.models import Model
 
 # --- Local Imports ---
-from astro.llms.base import LLMConfig, create_llm_model
+from astro.llms import create_llm_model
 from astro.llms.contexts import ChatContext, Context
-from astro.llms.prompts import PromptTemplate, RegisteredPromptTemplate
-from astro.loggings.base import get_loggy
-from astro.typings import (
-    ModelName,
-    ModelProvider,
-    PromptGenerator,
-    RecordableModel,
-    type_name,
+from astro.llms.prompts import (
+    create_assistant_message,
+    get_prompt_template,
 )
-from astro.utilities.uids import create_agent_uid
+from astro.loggings.base import get_loggy
+from astro.typings import NamedDict, type_name
+from astro.utilities.display import pretty_print_model_message
+from astro.utilities.timing import get_datetime_str
 
 # --- Globals ---
 loggy = get_loggy(__file__)
 
 
-class AgentConfig(RecordableModel, frozen=True):
-    name: str = "agent"
-    llm_config: LLMConfig
-    context_type: type[Context] | None = None
-    system_prompt_template: RegisteredPromptTemplate | None = None
-    welcome_prompt_tag: RegisteredPromptTemplate | None = None
-    context_prompt_tag: RegisteredPromptTemplate | None = None
+# ======================================================================
+# Event Data Model
+# ======================================================================
+class ChatEvent(BaseModel):
+    type: Literal[
+        "start", "text", "thinking", "tool_call", "tool_result", "final", "end"
+    ]
+    content: str | Sequence[UserContent] | None = None
+    name: str | None = None
+    args: str | NamedDict | None = None
+    result: Any | None = None
 
-    @field_serializer("context_type", mode="plain")
-    def _serialize_context_type(self, context_type: type[Context] | None) -> str | None:
-        if context_type is None:
-            return None
-        else:
-            return f"{context_type.__module__}.{context_type.__name__}"
 
-    @field_validator("context_type", mode="before")
-    def _validate_context_type(cls, context_type: Any) -> type[Context] | None:
-        # None -> do nothing
-        if context_type is None:
-            return None
-
-        # Context type -> return as is
-        elif isinstance(context_type, type) and issubclass(context_type, Context):
-            return context_type
-
-        # String -> try to import and return
-        elif isinstance(context_type, str):
-            try:
-                module_name, class_name = context_type.rsplit(".", 1)
-                module = __import__(module_name, fromlist=[class_name])
-                context_cls = getattr(module, class_name)
-                if isinstance(context_cls, type) and issubclass(context_cls, Context):
-                    return context_cls
-            except Exception as error:
-                raise loggy.CreationError(
-                    object_type=Context,
-                    reason=f"Failed to import context class {context_type}",
-                    caused_by=error,
-                )
-
-        # Anything else -> error
-        else:
-            raise loggy.ExpectedVariableType(
-                var_name="context_type",
-                expected=(type[Context], str, NoneType),
-                got=type(context_type),
+def _response_delta_to_chat_event(part: ModelResponsePartDelta) -> ChatEvent:
+    match part.part_delta_kind:
+        case "text":
+            return ChatEvent(type="text", content=part.content_delta)
+        case "thinking":
+            return ChatEvent(type="thinking", content=part.content_delta)
+        case "tool_call":
+            return ChatEvent(
+                type="tool_call", name=part.tool_name_delta, args=part.args_delta
             )
+        case default:
+            raise loggy.ValueError(f"Internal error: unknown {default}")
 
-    @classmethod
-    def _parse_prompt_template(
-        cls,
-        var_name: str,
-        prompt_template_or_tag: str | RegisteredPromptTemplate | None,
-    ) -> RegisteredPromptTemplate | None:
-        # Handle null cases
-        if prompt_template_or_tag is None:
-            return None
-        elif not isinstance(prompt_template_or_tag, (str, RegisteredPromptTemplate)):
-            raise loggy.ExpectedVariableType(
-                var_name=var_name,
-                expected_type=(str, RegisteredPromptTemplate, None),
-                actual_type=type(prompt_template_or_tag),
-            )
-        elif isinstance(prompt_template_or_tag, str):
-            try:
-                return RegisteredPromptTemplate(prompt_template_or_tag)
-            except Exception as error:
-                raise loggy.CreationError(
-                    object_type=AgentConfig,
-                    reason=(
-                        f"Failed to create RegisteredPromptTemplate for {var_name!r} "
-                        f"from tag {prompt_template_or_tag!r}"
-                    ),
-                    caused_by=error,
-                )
-        else:
-            return prompt_template_or_tag
 
-    @classmethod
-    def for_chat(
-        cls,
-        identifier: str | ModelName | ModelProvider,
-        provider: str | ModelProvider | None = None,
-        system_prompt_template_or_tag: str | RegisteredPromptTemplate | None = None,
-        welcome_prompt_template_or_tag: str | RegisteredPromptTemplate | None = None,
-        context_prompt_template_or_tag: str | RegisteredPromptTemplate | None = None,
-        context_type: type[ChatContext] | None = None,
-        **overrides: Any,
-    ) -> "AgentConfig":
-        # Create LLM config
-        try:
-            llm_config = LLMConfig.for_chat(
-                identifier=identifier,
-                provider=provider,
-                **overrides,
-            )
-        except Exception as error:
-            raise loggy.CreationError(
-                object_type=AgentConfig,
-                reason="Failed to create LLMConfig",
-                caused_by=error,
-            )
-        try:
-            system_prompt_template = (
-                AgentConfig._parse_prompt_template(
-                    "system_prompt_template_or_tag", system_prompt_template_or_tag
-                )
-                or RegisteredPromptTemplate.CHAT_SYSTEM
-            )
-            welcome_prompt_template = (
-                AgentConfig._parse_prompt_template(
-                    "welcome_prompt_template_or_tag", welcome_prompt_template_or_tag
-                )
-                or RegisteredPromptTemplate.CHAT_WELCOME
-            )
-            context_prompt_template = (
-                AgentConfig._parse_prompt_template(
-                    "context_prompt_template_or_tag", context_prompt_template_or_tag
-                )
-                or RegisteredPromptTemplate.CHAT_CONTEXT
-            )
+def _to_chat_event(event: AgentStreamEvent | AgentRunResultEvent[str]) -> ChatEvent:
+    """Translate low-level AgentStreamEvent into ChatEvent."""
+    if isinstance(event, PartStartEvent):
+        return ChatEvent(type="start")
 
-        except Exception as error:
-            raise loggy.CreationError(
-                object_type=RegisteredPromptTemplate,
-                reason="Error occurred while making prompt templates for AgentConfig",
-                caused_by=error,
-            )
+    if isinstance(event, PartDeltaEvent):
+        return _response_delta_to_chat_event(event.delta)
 
-        return cls(
-            name="chat-agent",
-            llm_config=llm_config,
-            context_type=context_type or ChatContext,
-            system_prompt_template=system_prompt_template,
-            welcome_prompt_tag=welcome_prompt_template,
-            context_prompt_tag=context_prompt_template,
+    if isinstance(event, FunctionToolCallEvent):
+        return ChatEvent(
+            type="tool_call", name=event.part.tool_name, args=event.part.args
+        )
+    if isinstance(event, FunctionToolResultEvent):
+        return ChatEvent(
+            type="tool_result", content=str(event.content), result=event.result
         )
 
+    if isinstance(event, FinalResultEvent):
+        return ChatEvent(type="final", name=event.tool_name)
 
-class Agent:
-    """A general purpose agent that can perform various tasks using LLM models.
+    if isinstance(event, AgentRunResultEvent):
+        return ChatEvent(type="end", result=event.result)
 
-    This is the base agent class that handles common functionality like message
-    management, prompt templates, and LLM interaction. Specific agent behaviors
-    are created through factory functions and configuration.
-    """
+    else:
+        raise loggy.ValueError(f"Unknown event type: {type_name(event)}")
 
-    def __init__(
-        self, config: AgentConfig, shared_context: Context | None = None
-    ) -> None:
-        """Initialize an Agent with the given configuration.
+
+# ======================================================================
+# Agent Factory
+# ======================================================================
+def create_agent(
+    identifier: str,
+    instructions: str | Sequence[str] | None = None,
+    model_settings: ModelSettings | None = None,
+    context_type: type = NoneType,
+    agent_name: str = "agent",
+) -> Agent[Context, str]:
+    try:
+        model = create_llm_model(identifier)
+    except Exception as error:
+        raise loggy.CreationError(object_type=Model, caused_by=error)
+    return Agent(
+        name=agent_name,
+        model=model,
+        instructions=instructions,
+        deps_type=context_type,
+        model_settings=model_settings,
+    )
+
+
+# ======================================================================
+# Chat Constructor
+# ======================================================================
+def create_astro_chat(
+    identifier: str = "ollama:llama3.1:latest",
+) -> tuple[
+    Callable[[str], AsyncIterator[AgentStreamEvent | AgentRunResultEvent[str]]],
+    list[ModelMessage],
+]:
+    astro_agent = create_agent(
+        identifier,
+        model_settings=ModelSettings(temperature=0.7),
+        context_type=ChatContext,
+        agent_name="astro-chat",
+    )
+    context = ChatContext()
+    system_template = get_prompt_template("chat-system")
+    welcome_template = get_prompt_template("chat-welcome")
+
+    messages: list[ModelMessage] = [create_assistant_message(welcome_template(context))]
+
+    @astro_agent.instructions
+    async def get_system_instructions(ctx: RunContext[ChatContext]) -> str:
+        return system_template(ctx.deps)
+
+    @astro_agent.tool(docstring_format="google")
+    async def get_system_datetime(ctx: RunContext[ChatContext]) -> str:
+        """Get the current system datetime formatted as a string.
+
+        Returns a formatted datetime string from the chat context's datetime attribute.
 
         Args:
-            agent_config: Configuration for the agent including LLM settings and prompts
-            context: Optional context instance, defaults to appropriate context type
-        """
-        # Core components
-        self._config = config
-        self._name = config.name
-        self._context = shared_context or (
-            config.context_type() if config.context_type else None
-        )
-        self._uid = create_agent_uid(self._name)
-
-        # Create the chat model
-        self._llm_model = create_llm_model(self._config.llm_config)
-
-        # Messages
-        self._messages: list[BaseMessage] = []
-
-        # Create prompt templates from config
-        self._system_template: PromptTemplate | None = None
-        self._welcome_template: PromptTemplate | None = None
-        self._context_template: PromptTemplate | None = None
-
-        if self._config.system_prompt_template:
-            self._system_template = PromptTemplate(self._config.system_prompt_template)
-
-        if self._config.welcome_prompt_tag:
-            self._welcome_template = PromptTemplate(self._config.welcome_prompt_tag)
-
-        if self._config.context_prompt_tag:
-            self._context_template = PromptTemplate(self._config.context_prompt_tag)
-
-        # Create live generator for context updates
-        self._context_generator: PromptGenerator | None = (
-            self._context_template.generated_with(self._context)
-            if self._context_template and self._context
-            else None
-        )
-
-        # Initialize message history
-        self._reset_messages()
-
-    @property
-    def messages(self) -> list[BaseMessage]:
-        """Get the current list of messages in the conversation."""
-        return self._messages
-
-    @property
-    def config(self) -> LLMConfig:
-        """Get the LLM configuration for the agent."""
-        return self._config.llm_config
-
-    @property
-    def uid(self) -> str:
-        """Get the unique identifier for this agent."""
-        return self._uid
-
-    @property
-    def context(self) -> Any:
-        """Get the context used for prompt generation."""
-        return self._context
-
-    def _reset_messages(self) -> None:
-        """Reset the message history, adding system and welcome prompts if enabled."""
-        self._messages = []
-
-        # Add system prompt
-        if self._system_template is not None:
-            system_message = self._system_template.formatted_with(self._context)
-            self._messages.append(system_message)
-
-        # Add welcome prompt
-        if self._welcome_template is not None:
-            welcome_message = self._welcome_template.formatted_with(self._context)
-            self._messages.append(welcome_message)
-
-    def _invoke_on_messages(self) -> BaseMessage:
-        """Invoke the LLM on the current message history."""
-        return self._llm_model.invoke(self._messages)
-
-    def _add_context_message(self) -> None:
-        """Add a fresh context message to the conversation if context prompts are enabled."""
-        if self._context_generator is not None:
-            context_message = next(self._context_generator)
-            self._messages.append(context_message)
-
-    def act(self, user_input: str) -> str:
-        """Process user input and generate a response.
-
-        Args:
-            user_input: The user's message text.
+            `ctx` (`RunContext[ChatContext]`): Runtime context containing chat state and dependencies.
 
         Returns:
-            str: The agent's response text.
-
-        Raises:
-            NotImplementedError: If LangChain returns non-string content.
+            `str`: Formatted datetime string representing the current system time.
         """
-        # Add user message
-        user_message = HumanMessage(user_input)
-        self._messages.append(user_message)
+        return get_datetime_str(ctx.deps.datetime)
 
-        # Add context message with live updates if enabled
-        if self._context_template is not None:
-            self._add_context_message()
+    async def chat_stream(
+        prompt: str,
+    ) -> AsyncIterator[AgentStreamEvent | AgentRunResultEvent[str]]:
+        nonlocal messages
+        async for event in astro_agent.run_stream_events(
+            prompt, message_history=messages, deps=context
+        ):
+            if event.event_kind == "agent_run_result":
+                messages.extend(event.result.new_messages())
+            yield event
 
-        # Get and add assistant response
-        response = self._invoke_on_messages()
-        self._messages.append(response)
+    return chat_stream, messages
 
-        # Handle LangChain's content typing
-        if not isinstance(response.content, str):
-            raise loggy.NotImplementedError(
-                "Astro does not handle the funny LangChain content types "
-                f"yet, only strings: {type_name(response.content)}",
-                reponse_content_type=type(response.content),
-            )
 
-        return response.content
+# ======================================================================
+# Main Interactive Loop
+# ======================================================================
+async def main():
+    from rich.console import Group
+    from rich.live import Live
+    from rich.markdown import Markdown
+    from rich.panel import Panel
 
-    def __repr__(self) -> str:
-        """Return a detailed string representation for debugging."""
-        template_info = []
-        if self._system_template:
-            template_info.append("system")
-        if self._welcome_template:
-            template_info.append("welcome")
-        if self._context_template:
-            template_info.append("context")
+    from astro.utilities.display import user_md_input
 
-        templates_str = f"[{', '.join(template_info)}]" if template_info else "[]"
+    chat, messages = create_astro_chat()
 
-        return (
-            f"AstroAgent(uid={self.uid!r}, "
-            f"model={self.config.model_name}, "
-            f"templates={templates_str}, "
-            f"messages={len(self.messages)})"
+    # Styling map
+    STYLE_MAP = {
+        "text": "purple",
+        "thinking": "yellow",
+        "tool_call": "blue",
+        "tool_result": "cyan",
+        "final": "green",
+        "end": "red",
+    }
+
+    def create_panel(title: str = "", content: str = "", etype: str = "") -> Panel:
+        return Panel(
+            Markdown(content),
+            title=title,
+            title_align="left",
+            style=STYLE_MAP.get(etype, "dim"),
+            expand=True,
         )
 
-    def __str__(self) -> str:
-        """Return a human-readable string representation."""
-        return f"AstroAgent with {len(self.messages)} messages using {self.config.model_name}"
-
-
-if __name__ == "__main__":
-    from astro.utilities.display import astro_md_print, user_md_input
-
-    agent_config = AgentConfig.for_chat(identifier="gpt-4o-mini")
-
-    agent = Agent(config=agent_config)
-
-    print(agent_config)
-    print(agent)
-
-    config_json = agent_config.model_dump_json(indent=4)
-    print(config_json)
-
-    config2 = AgentConfig.model_validate_json(config_json)
-    print(config2)
-    agent2 = Agent(config=config2)
-
-    for message in agent.messages:
-        astro_md_print(message.content)
-    while user_input := user_md_input():
-        if user_input.lower() in ("exit", "q", "quit"):
+    while True:
+        user_prompt = user_md_input()
+        if user_prompt.lower() in ("q", "quit"):
             break
-        ai_output = agent2.act(user_input)
-        astro_md_print(ai_output)
+        if user_prompt.lower() == "/messages":
+            for m in messages:
+                pretty_print_model_message(m)
+            continue
+
+        panels: list[Panel] = []
+        current_text = ""
+
+        def render_screen() -> Group:
+            return Group(*panels)
+
+        with Live(render_screen(), refresh_per_second=8, transient=False) as live:
+            current_content = ""
+            counter = 0
+            was_tool_call = False
+            offset = 0
+            async for event in chat(user_prompt):
+                if isinstance(event, PartStartEvent):
+                    if event.part.part_kind == "text" and len(event.part.content) > 0:
+                        current_content = event.part.content
+                        panels.insert(
+                            event.index,
+                            create_panel("Astro", current_content, "text"),
+                        )
+
+                    elif event.part.part_kind == "thinking":
+                        current_content = event.part.content
+                        panels.insert(
+                            event.index,
+                            create_panel("Thinking", current_content, "thinking"),
+                        )
+
+                    elif event.part.part_kind == "tool-call":
+                        current_content = str(event.part.args)
+                        panels.insert(
+                            event.index,
+                            create_panel(
+                                event.part.tool_name, current_content, "tool_call"
+                            ),
+                        )
+
+                elif isinstance(event, PartDeltaEvent):
+                    if (
+                        event.delta.part_delta_kind == "text"
+                        and len(event.delta.content_delta) > 0
+                    ):
+                        current_content += event.delta.content_delta
+                        panel = create_panel("Astro", current_content, "text")
+                        panels[event.index] = panel
+                    elif event.delta.part_delta_kind == "thinking":
+                        current_content += str(event.delta.content_delta)
+                        panel = create_panel("Thinking", current_content, "thinking")
+                        panels[event.index] = panel
+                    elif event.delta.part_delta_kind == "tool_call":
+                        current_content += "Calling"
+                        if (
+                            event.delta.args_delta is not None
+                            and len(event.delta.args_delta) > 0
+                        ):
+                            current_content += (
+                                f" with arguments `{event.delta.args_delta}`"
+                            )
+                        panel = create_panel("Tool Call", current_content, "tool_call")
+                        panels[event.index] = panel
+
+                live.update(render_screen())
+                counter += 1
+                # print(f"Event {counter}: {event}")
+                # print("=" * 40)
+                # print(
+                #     "\n".join(
+                #         [
+                #             f" -> {counter}.{i} - {panel.title}"
+                #             for i, panel in enumerate(panels)
+                #         ]
+                #     )
+                # )
+                # print("=" * 40)
+
+
+# ======================================================================
+# Entrypoint
+# ======================================================================
+if __name__ == "__main__":
+    import asyncio
+
+    try:
+        asyncio.run(main())
+    except KeyboardInterrupt:
+        print("\nExiting Astro Chat...")

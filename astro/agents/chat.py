@@ -4,7 +4,7 @@ from typing import Any
 # --- Local Imports ---
 from astro.agents.base import Agent, AgentConfig
 from astro.llms.contexts import ChatContext
-from astro.llms.prompts import RegisteredPromptTemplate
+from astro.llms.prompts import PromptTemplate
 from astro.loggings.base import get_loggy
 from astro.typings import ModelName, ModelProvider
 
@@ -18,9 +18,9 @@ loggy = get_loggy(__file__)
 def create_chat_agent(
     identifier: str | ModelName | ModelProvider,
     provider: str | ModelProvider | None = None,
-    system_prompt_or_tag: str | RegisteredPromptTemplate | None = None,
-    welcome_prompt_or_tag: str | RegisteredPromptTemplate | None = None,
-    context_prompt_or_tag: str | RegisteredPromptTemplate | None = None,
+    system_prompt_or_tag: str | PromptTemplate | None = None,
+    welcome_prompt_or_tag: str | PromptTemplate | None = None,
+    context_prompt_or_tag: str | PromptTemplate | None = None,
     context_type: type[ChatContext] | None = None,
     **overrides: Any,
 ) -> Agent:
@@ -71,9 +71,9 @@ def create_primary_chat_agent(
     return create_chat_agent(
         identifier=identifier,
         provider=provider,
-        system_prompt_or_tag=RegisteredPromptTemplate.CHAT_SYSTEM,
-        welcome_prompt_or_tag=RegisteredPromptTemplate.CHAT_WELCOME,
-        context_prompt_or_tag=RegisteredPromptTemplate.CHAT_CONTEXT,
+        system_prompt_or_tag=PromptTemplate.CHAT_SYSTEM,
+        welcome_prompt_or_tag=PromptTemplate.CHAT_WELCOME,
+        context_prompt_or_tag=PromptTemplate.CHAT_CONTEXT,
         context_type=ChatContext,
     )
 

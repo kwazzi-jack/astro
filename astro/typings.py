@@ -1,69 +1,29 @@
+# --- Internal Imports ---
 import base64
 import json
-import random
-from abc import ABC, abstractmethod
-from collections.abc import Generator, Sequence
+from collections.abc import Sequence
 from datetime import datetime
 from enum import StrEnum
 from pathlib import Path
-from typing import Any, Generic, Self, TypeAlias, TypeVar
+from typing import Any, TypeAlias, TypeAliasType, TypeVar, get_args
 
+# --- External Imports ---
 import blake3
-from langchain_core.messages import (
-    AIMessage,
-    BaseMessage,
-    HumanMessage,
-    SystemMessage,
-    ToolMessage,
-)
 from pydantic import BaseModel, ConfigDict
-from sqlmodel import Field, SQLModel
 
-from astro.utilities.timing import get_datetime_now
+# --- Local Imports ---
 
+# --- Generic Types & Type Aliases ---
 StrPath: TypeAlias = str | Path
 StrDict: TypeAlias = dict[str, str]
 PathDict: TypeAlias = dict[str, Path]
-RecordableModelType = TypeVar(
-    "RecordableModelType",
-    bound="RecordableModel",
-)
-ImmutableRecordType = TypeVar(
-    "ImmutableRecordType", bound="ImmutableRecord", covariant=True
-)
-HashableObject: TypeAlias = "RecordableModel | ImmutableRecord"
 NamedDict: TypeAlias = dict[str, Any]
-PromptGenerator: TypeAlias = Generator[BaseMessage, None, None]
-BaseMessageType = TypeVar("BaseMessageType", bound=BaseMessage)
-RecordTableType = TypeVar("RecordTableType", bound="ImmutableRecord[RecordableModel]")
+SchemaLike: TypeAlias = type[BaseModel] | BaseModel | dict[str, Any]
+RecordableType = TypeVar("RecordableType", bound="RecordableModel")
 
 
-class MessageRole(StrEnum):
-    SYSTEM = "system"
-    USER = "user"
-    HUMAN = "human"  # Alias for USER
-    ASSISTANT = "assistant"
-    AI = "ai"  # Alias for ASSISTANT
-    TOOL = "tool"
-    FUNCTION = "function"  # Alias for TOOL
-
-    @property
-    def message_type(self) -> type[BaseMessage]:
-        match self:
-            case MessageRole.SYSTEM:
-                return SystemMessage
-            case MessageRole.USER | MessageRole.HUMAN:
-                return HumanMessage
-            case MessageRole.ASSISTANT | MessageRole.AI:
-                return AIMessage
-            case MessageRole.FUNCTION | MessageRole.TOOL:
-                return ToolMessage
-
-            # Fail safe
-            case default:
-                raise ValueError(
-                    f"Probably internal mistake that {default} is not assigned yet"
-                )
+def literal_to_list(literal_type: TypeAliasType) -> list[Any]:
+    return [value for value in get_args(literal_type)]
 
 
 def secretify(value: Any) -> str:
@@ -115,13 +75,20 @@ def type_name(obj: Any) -> str:
         return type(obj).__name__
 
 
-def options_to_str(values: Sequence[str]) -> str:
+def options_to_str(values: Sequence[str], with_repr: bool = False) -> str:
     if len(values) == 0:
-        return ""
+        return "''" if with_repr else ""
     elif len(values) == 1:
-        return values[0]
+        return repr(values[0]) if with_repr else values[0]
     else:
-        return ", ".join(values[:-1]) + " or " + values[-1]
+        if with_repr:
+            return (
+                ", ".join(repr(value) for value in values[:-1])
+                + " or "
+                + repr(values[-1])
+            )
+        else:
+            return ", ".join(values[:-1]) + " or " + values[-1]
 
 
 def options_to_repr_str(values: Sequence[str]) -> str:
@@ -269,201 +236,6 @@ class RecordableModel(BaseModel, frozen=True):
         return secretify(self.uid)
 
 
-class ImmutableRecord(SQLModel, ABC, Generic[RecordableModelType]):
-    """Base SQLModel for immutable database records.
-
-    This class represents a persistent, immutable record with metadata for tracking access.
-
-    Attributes:
-        uid (int | None): Unique identifier for the record.
-        record_hash (int): Hash value for indexing and uniqueness.
-        created_at (datetime): Timestamp when the record was created.
-        last_accessed_at (datetime | None): Timestamp of last access.
-        access_count (int): Number of times the record has been accessed.
-    """
-
-    __abstract__ = True
-    uid: int | None = Field(default=None, primary_key=True)
-    record_hash: int = Field(index=True, unique=True, nullable=False)
-    created_at: datetime = Field(default_factory=get_datetime_now)
-
-    # Metadata for buffer system
-    last_accessed_at: datetime | None = Field(default=None, nullable=True)
-    access_count: int = Field(default=0)
-
-    @classmethod
-    @abstractmethod
-    def from_model(cls, model: RecordableModelType) -> Self:
-        """Convert a recordable model to an immutable record.
-
-        Args:
-            model (RecordableModelType): The model instance to convert.
-
-        Returns:
-            ImmutableRecordType: The corresponding immutable record.
-
-        Raises:
-            NotImplementedError: This method must be implemented by subclasses.
-        """
-        raise NotImplementedError
-
-    @abstractmethod
-    def to_model(self, *dependencies: RecordableModel) -> RecordableModelType:
-        """Convert an immutable record back to a recordable model.
-
-        Args:
-            *dependencies (RecordableModelType): Additional dependencies required for reconstruction.
-
-        Returns:
-            RecordableModelType: The reconstructed model instance.
-
-        Raises:
-            NotImplementedError: This method must be implemented by subclasses.
-        """
-        raise NotImplementedError
-
-    @property
-    def secret_uid(self) -> str:
-        return secretify(self.uid)
-
-    @property
-    def secret_hash(self) -> str:
-        return secretify(self.record_hash)
-
-
-class ModelName(StrEnum):
-    # OpenAI
-    GPT_4O = "gpt-4o"
-    GPT_4O_MINI = "gpt-4o-mini"
-
-    # Anthropic
-    CLAUDE_SONNET_4 = "claude-sonnet-4"
-
-    # Ollama
-    GEMMA3_4B = "gemma3:4b"
-    LLAMA3_8B = "llama3:8b"
-    DEEPSEEK_R1_8B = "deepseek-r1:8b"
-    DEEPSEEK_R1_14B = "deepseek-r1:14b"
-    MISTRAL_7B = "mistral:7b"
-    CODELLAMA_7B = "codellama:7b"
-    CODELLAMA_13B = "codellama:13b"
-    CODELLAMA_34B = "codellama:34b"
-    GPT_OSS_20B = "gpt-oss:20b"
-
-    @property
-    def provider(self) -> "ModelProvider":
-        match self:
-            # OpenAI
-            case ModelName.GPT_4O | ModelName.GPT_4O_MINI:
-                return ModelProvider.OPENAI
-            # Anthropic
-            case ModelName.CLAUDE_SONNET_4:
-                return ModelProvider.ANTHROPIC
-            # Ollama
-            case (
-                ModelName.GEMMA3_4B
-                | ModelName.LLAMA3_8B
-                | ModelName.DEEPSEEK_R1_8B
-                | ModelName.DEEPSEEK_R1_14B
-                | ModelName.MISTRAL_7B
-                | ModelName.CODELLAMA_7B
-                | ModelName.CODELLAMA_13B
-                | ModelName.CODELLAMA_34B
-                | ModelName.GPT_OSS_20B
-            ):
-                return ModelProvider.OLLAMA
-            case _:
-                # Brian - Annoying that we have to do this for type checker but oh well
-                raise ValueError(f"Unsupported ModelName: {self!r}")
-
-    @classmethod
-    def available(cls, *inclusions: str) -> list[str]:
-        if len(inclusions) == 0:
-            return [model.value for model in cls]
-        return [model.value for model in cls if model.value in inclusions]
-
-    @classmethod
-    def supports(cls, model_name: str) -> bool:
-        normalized_value = (
-            model_name.strip().upper().replace(":", "_").replace("-", "_")
-        )
-        return normalized_value in cls.__members__
-
-
-class ModelProvider(StrEnum):
-    OPENAI = "openai"
-    ANTHROPIC = "anthropic"
-    OLLAMA = "ollama"
-
-    @property
-    def default(self) -> "ModelProvider":
-        return ModelProvider.OLLAMA
-
-    @classmethod
-    def associated_with(cls, model_name: str) -> "ModelProvider":
-        if not ModelName.supports(model_name):
-            raise ValueError(f"The model {model_name} is not supported by Astro")
-
-        model_name_enum = ModelName(model_name)
-        return model_name_enum.provider
-
-    @property
-    def models(self) -> list[ModelName]:
-        match self:
-            # OpenAI
-            case ModelProvider.OPENAI:
-                return [ModelName.GPT_4O, ModelName.GPT_4O_MINI]
-
-            # Anthropic
-            case ModelProvider.ANTHROPIC:
-                return [ModelName.CLAUDE_SONNET_4]
-
-            # Ollama
-            case ModelProvider.OLLAMA:
-                return [
-                    ModelName.GEMMA3_4B,
-                    ModelName.LLAMA3_8B,
-                    ModelName.DEEPSEEK_R1_8B,  # Brian - might be issue if we use langchain-deepseek
-                    ModelName.DEEPSEEK_R1_14B,  # Brian - might be issue if we use langchain-deepseek
-                    ModelName.MISTRAL_7B,
-                    ModelName.CODELLAMA_7B,
-                    ModelName.CODELLAMA_13B,
-                    ModelName.CODELLAMA_34B,
-                    ModelName.GPT_OSS_20B,  # Brian - OpenAI does not support this via API
-                ]
-
-            # Fail safe
-            case default:
-                raise ValueError(
-                    f"Probably internal mistake that {default} is not assigned yet"
-                )
-
-    @classmethod
-    def available(cls, *inclusions: str) -> list[str]:
-        if len(inclusions) == 0:
-            return [provider.value for provider in cls]
-        return [provider.value for provider in cls if provider.value in inclusions]
-
-    @classmethod
-    def supports(cls, model_name: str) -> bool:
-        normalized_value = model_name.strip().upper()
-        return normalized_value in cls.__members__
-
-
-def model_provider_options(recommendations: dict[str, ModelName] | None) -> str:
-    if recommendations is None:
-        return options_to_str(ModelProvider.available())
-    return options_to_str(ModelProvider.available(*recommendations.keys()))
-
-
-def model_name_options() -> str:
-    return options_to_repr_str(ModelName.available())
-
-
-def available_provider_model_options(model_provider: ModelProvider) -> str:
-    return options_to_repr_str([model.value for model in model_provider.models])
-
-
 def count_pydantic_fields(model_class: type[BaseModel]) -> int:
     return len(model_class.model_fields)
 
@@ -483,95 +255,4 @@ def get_class_from_import_path(import_path: str) -> type:
 
 
 if __name__ == "__main__":
-
-    class TestModel(RecordableModel, frozen=True):
-        float_value: float = 0.000001
-        path_value: Path = Path.cwd()
-        date_value: datetime = get_datetime_now()
-        str_value: str = "hey there"
-        int_value: int = 22
-        list_value: list[int] = [1, 2, 3]
-
-    # Generate random values for model_1 and model_2 to make them different
-    model_1 = TestModel(
-        float_value=random.random(),
-        int_value=random.randint(0, 100),
-        str_value=f"random_str_{random.randint(0, 100)}",
-        list_value=[random.randint(0, 10) for _ in range(3)],
-    )
-    model_2 = TestModel(
-        float_value=random.random(),
-        int_value=random.randint(0, 100),
-        str_value=f"random_str_{random.randint(0, 100)}",
-        list_value=[random.randint(0, 10) for _ in range(3)],
-    )
-    model_3 = model_1.model_copy(deep=True)
-
-    # model_4 with exact same inputs as model_2
-    model_4 = model_2.model_copy(deep=True)
-
-    # model_5 as deep copy of model_1, but change a value
-    model_5 = model_1.model_copy(update={"int_value": 999}, deep=True)
-
-    # model_6 not same type
-    model_6 = RecordableModel()
-
-    print(f"{model_1=}")
-    print(f"{model_2=}")
-    print(f"{model_3=}")
-    print(f"{model_4=}")
-    print(f"{model_5=}")
-    print(f"{model_6=}")
-    print()
-    print(f"{hash(model_1)=}")
-    print(f"{hash(model_2)=}")
-    print(f"{hash(model_3)=}")
-    print(f"{hash(model_4)=}")
-    print(f"{hash(model_5)=}")
-    print(f"{hash(model_6)=}")
-    print()
-    print(f"{model_1.to_hex()=}")
-    print(f"{model_2.to_hex()=}")
-    print(f"{model_3.to_hex()=}")
-    print(f"{model_4.to_hex()=}")
-    print(f"{model_5.to_hex()=}")
-    print(f"{model_6.to_hex()=}")
-    print()
-    print(f"{model_1.to_base64()=}")
-    print(f"{model_2.to_base64()=}")
-    print(f"{model_3.to_base64()=}")
-    print(f"{model_4.to_base64()=}")
-    print(f"{model_5.to_base64()=}")
-    print(f"{model_6.to_base64()=}")
-    print()
-    print(f"{(model_1 is model_2)=:<20} (Expected: False)")
-    print(f"{(model_1 is model_3)=:<20} (Expected: False)")
-    print(f"{(model_1 is model_4)=:<20} (Expected: False)")
-    print(f"{(model_1 is model_5)=:<20} (Expected: False)")
-    print(f"{(model_1 is model_6)=:<20} (Expected: False)")
-    print(f"{(model_2 is model_3)=:<20} (Expected: False)")
-    print(f"{(model_2 is model_4)=:<20} (Expected: False)")
-    print(f"{(model_2 is model_5)=:<20} (Expected: False)")
-    print(f"{(model_2 is model_6)=:<20} (Expected: False)")
-    print(f"{(model_3 is model_4)=:<20} (Expected: False)")
-    print(f"{(model_3 is model_5)=:<20} (Expected: False)")
-    print(f"{(model_3 is model_6)=:<20} (Expected: False)")
-    print(f"{(model_4 is model_5)=:<20} (Expected: False)")
-    print(f"{(model_4 is model_6)=:<20} (Expected: False)")
-    print(f"{(model_5 is model_6)=:<20} (Expected: False)")
-    print()
-    print(f"{(model_1 == model_2)=:<20} (Expected: False)")
-    print(f"{(model_1 == model_3)=:<20} (Expected: True)")
-    print(f"{(model_1 == model_4)=:<20} (Expected: False)")
-    print(f"{(model_1 == model_5)=:<20} (Expected: False)")
-    print(f"{(model_1 == model_6)=:<20} (Expected: False)")
-    print(f"{(model_2 == model_3)=:<20} (Expected: False)")
-    print(f"{(model_2 == model_4)=:<20} (Expected: True)")
-    print(f"{(model_2 == model_5)=:<20} (Expected: False)")
-    print(f"{(model_2 == model_6)=:<20} (Expected: False)")
-    print(f"{(model_3 == model_4)=:<20} (Expected: False)")
-    print(f"{(model_3 == model_5)=:<20} (Expected: False)")
-    print(f"{(model_3 == model_6)=:<20} (Expected: False)")
-    print(f"{(model_4 == model_5)=:<20} (Expected: False)")
-    print(f"{(model_4 == model_6)=:<20} (Expected: False)")
-    print(f"{(model_5 == model_6)=:<20} (Expected: False)")
+    ...

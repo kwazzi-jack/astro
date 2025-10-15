@@ -15,494 +15,168 @@ Description:
 
 """
 
-from enum import StrEnum
+# --- Internal Imports ---
+import re
+from collections.abc import Callable
 from pathlib import Path
-from typing import Generic
+from typing import Literal
 
-from langchain.prompts import (
-    AIMessagePromptTemplate,
-    SystemMessagePromptTemplate,
-)
-from langchain_core.messages import BaseMessage
-from langchain_core.prompts.message import BaseMessagePromptTemplate
+# --- External Imports ---
+import frontmatter
+from jinja2 import Environment, FileSystemLoader, Template, meta, select_autoescape
+from pydantic_ai import ModelRequest, ModelResponse, SystemPromptPart, TextPart
 
-from astro.llms.contexts import ChatContext, Context
+# --- Local Imports ---
+from astro.llms.contexts import ChatContext, Context, select_context_type
 from astro.loggings import get_loggy
-from astro.paths import get_module_dir, read_markdown_file
-from astro.typings import BaseMessageType, MessageRole, PromptGenerator, options_to_str
+from astro.paths import get_module_dir
+from astro.typings import NamedDict, options_to_str
 
 # --- Globals ---
 loggy = get_loggy(__file__)
+
 
 # Path to prompts
 _PROMPT_DIR = get_module_dir(__file__) / "prompt-templates"
 if not _PROMPT_DIR.exists():
     raise FileNotFoundError(
-        "Cannot find `prompt-templates` directory in package. Ensure `astro` is installed properly."
+        "Cannot find 'prompt-templates' directory in package. Ensure Astro is installed properly."
     )
 
+# Setup Jinja2 Environment once
+_jinja2_env = Environment(
+    loader=FileSystemLoader(_PROMPT_DIR),
+    autoescape=select_autoescape(("prompt.md")),
+    trim_blocks=True,
+    lstrip_blocks=True,
+)
 
-# IMPORTANT: This is manually set to avoid unknown prompts
-class RegisteredPromptTemplate(StrEnum):
-    CHAT_SYSTEM = "chat-system"
-    CHAT_WELCOME = "chat-welcome"
-    CHAT_CONTEXT = "chat-context"
+# Registered prompt templates
+_PROMPT_TEMPLATE_PATHS = {
+    "chat-system": (_PROMPT_DIR / "chat-system.prompt.md").resolve(),
+    "chat-welcome": (_PROMPT_DIR / "chat-welcome.prompt.md").resolve(),
+    "chat-context": (_PROMPT_DIR / "chat-context.prompt.md").resolve(),
+}
+PromptTags = Literal["chat-system", "chat-welcome", "chat-context"]
 
-    @property
-    def purpose(self) -> str:
-        match self:
-            # Chat related
-            case (
-                RegisteredPromptTemplate.CHAT_CONTEXT
-                | RegisteredPromptTemplate.CHAT_SYSTEM
-                | RegisteredPromptTemplate.CHAT_WELCOME
-            ):
-                return "chat"
-            case default:
-                raise loggy.ValueError(
-                    f"Probably internal mistake that {default} is not assigned yet"
-                )
-
-    @property
-    def file_path(self) -> Path:
-        """Path to the prompt template file associated with this enum value.
-
-        Returns:
-            Path: The file path to the markdown template file.
-
-        Raises:
-            ValueError: If the enum value is not recognized (internal error).
-        """
-        match self:
-            case RegisteredPromptTemplate.CHAT_CONTEXT:
-                return _PROMPT_DIR / "chat-context.prompt.md"
-            case RegisteredPromptTemplate.CHAT_SYSTEM:
-                return _PROMPT_DIR / "chat-system.prompt.md"
-            case RegisteredPromptTemplate.CHAT_WELCOME:
-                return _PROMPT_DIR / "chat-welcome.prompt.md"
-            case default:
-                raise loggy.ValueError(
-                    f"Probably internal mistake that {default} is not assigned yet"
-                )
-
-    @property
-    def context_type(self) -> type[Context]:
-        """The Context subclass associated with this prompt template.
-
-        Returns:
-            type[Context]: The Context subclass type.
-
-        Raises:
-            ValueError: If the enum value is not recognized (internal error).
-        """
-        match self:
-            # Chat related
-            case (
-                RegisteredPromptTemplate.CHAT_CONTEXT
-                | RegisteredPromptTemplate.CHAT_SYSTEM
-                | RegisteredPromptTemplate.CHAT_WELCOME
-            ):
-                return ChatContext
-            case default:
-                raise loggy.ValueError(
-                    f"Probably internal mistake that {default} is not assigned yet"
-                )
-
-    @property
-    def role(self) -> MessageRole:
-        """The LangChain message template type associated with this prompt.
-
-        Returns:
-            MessageRole: The LangChain message class.
-
-        Raises:
-            ValueError: If the enum value is not recognized (internal error).
-        """
-        match self:
-            # System Message
-            case (
-                RegisteredPromptTemplate.CHAT_SYSTEM
-                | RegisteredPromptTemplate.CHAT_CONTEXT
-            ):
-                return MessageRole.SYSTEM
-
-            # AI Message
-            case RegisteredPromptTemplate.CHAT_WELCOME:
-                return MessageRole.AI
-
-            # Catch-all for unrecognized enum values
-            case default:
-                raise loggy.ValueError(
-                    f"Probably internal mistake that {default} is not assigned yet"
-                )
-
-    def exists(self) -> bool:
-        """Checks if the prompt template file exists.
-
-        Returns:
-            bool: True if the file exists, False otherwise.
-        """
-        return self.file_path.exists()
-
-    @classmethod
-    def from_tag(cls, tag: str) -> "RegisteredPromptTemplate":
-        """Creates a RegisteredPromptTemplate enum instance from a string tag.
-
-        Args:
-            tag (str): The tag corresponding to a registered prompt template.
-
-        Returns:
-            RegisteredPromptTemplate: The enum instance corresponding to the tag.
-
-        Raises:
-            ExpectedVariableType: If tag is not a string.
-            NoEntryError: If tag does not correspond to a registered prompt template.
-        """
-        # Input validation
-        if not isinstance(tag, str):
-            raise loggy.ExpectedVariableType(
-                var_name="tag", expected=str, got=type(tag), with_value=tag
-            )
-        if tag not in RegisteredPromptTemplate:
-            raise loggy.NoEntryError(
-                key_value=tag, sources="registered prompt templates"
-            )
-        return cls(tag)
+# Regex globals
+ALPHA = r"[a-z]"
+ALPHANUMERIC = r"[a-z0-9]"
+SNAKE_CASE = rf"{ALPHA}+[_{ALPHANUMERIC}+]*"
+STRING_FORMAT_VARIABLE = rf"{{({SNAKE_CASE})}}"
+INPUT_VARIABLE_PATTERN = re.compile(STRING_FORMAT_VARIABLE)
 
 
-class PromptTemplate[ContextType: Context]:
-    """A wrapper class for managing and formatting prompt templates using LangChain.
-
-    This class abstracts the process of loading raw prompt templates from files,
-    determining the appropriate message type (e.g., system or AI message), and
-    formatting them with contextual data. It serves as an intermediary between
-    raw template files and formatted LangChain BaseMessage objects, making it
-    easier to generate prompts dynamically.
-
-    Attributes:
-        tag: The RegisteredPromptTemplate enum value identifying the prompt.
-        raw_template: The raw string content of the prompt template loaded from file.
-        message_type: The type of LangChain message template to use (e.g., SystemMessagePromptTemplate).
-    """
-
-    def __init__(self, tag: str | RegisteredPromptTemplate) -> None:
-        """Initialize the PromptTemplate with a registered tag.
-
-        Loads the raw template from the associated file and determines the message type
-        based on the tag. Validates that the tag is a valid RegisteredPromptTemplate
-        instance and that the corresponding file exists.
-
-        Args:
-            tag (str | RegisteredPromptTemplate): The RegisteredPromptTemplate enum value for the prompt template.
-
-        Raises:
-            ExpectedVariableType: If tag is not a RegisteredPromptTemplate instance.
-            FileNotFoundError: If the associated template file does not exist.
-            LoadError: If an error occurs while reading the template file.
-        """
-        # Input validation
-        if not isinstance(tag, (str, RegisteredPromptTemplate)):
-            raise loggy.ExpectedVariableType(
-                var_name="tag",
-                expected=RegisteredPromptTemplate,
-                got=type(tag),
-                with_value=tag,
-            )
-
-        # Assign tag based on registered templates
-        if isinstance(tag, str):
-            try:
-                self._template = RegisteredPromptTemplate.from_tag(tag)
-            except Exception as error:
-                raise loggy.CreationError(
-                    object_type=RegisteredPromptTemplate,
-                    reason=f"Failed to create from tag {tag!r}",
-                    caused_by=error,
-                )
-        else:
-            self._template = tag
-
-        # Check if file exists
-        if not self._template.exists():
-            raise loggy.FileNotFoundError(
-                f"Prompt template file not found for tag {self._template}",
-                warning="Ensure `astro` is installed properly to correctly identify system files.",
-                file_path=self._template.file_path,
-            )
-
-        # Load other attributes
-        self._context_type: type[Context] = self._template.context_type
-        self._role_type: MessageRole = self._template.role
-        self._raw_template: str = self._load_raw_template()
-
-    @property
-    def template(self) -> RegisteredPromptTemplate:
-        """The registered template tag identifying this prompt.
-
-        Returns:
-            RegisteredPromptTemplate: The enum value for this prompt template.
-        """
-        return self._template
-
-    @property
-    def raw_template(self) -> str:
-        """The raw string content of the prompt template.
-
-        Returns:
-            str: The raw template string loaded from file.
-        """
-        return self._raw_template
-
-    @property
-    def context_type(self) -> type[Context]:
-        """The Context subclass type associated with this prompt template.
-
-        Returns:
-            type[Context]: The Context subclass type.
-        """
-        return self._context_type
-
-    @property
-    def role_type(self) -> MessageRole:
-        """The LangChain message template type (e.g., SystemMessagePromptTemplate).
-
-        Returns:
-            MessageRole: The message role type.
-        """
-        return self._role_type
-
-    def _load_raw_template(self) -> str:
-        """Load the raw template string from the file associated with the tag.
-
-        Returns:
-            str: The raw template content.
-
-        Raises:
-            FileNotFoundError: If the file does not exist.
-            LoadError: If an error occurs during file reading.
-        """
-        file_path = self._template.file_path
-
-        try:
-            return read_markdown_file(file_path)
-        except Exception as error:
-            raise loggy.LoadError(
-                path_or_uid=file_path,
-                obj_or_key=self._template.value,
-                load_from="markdown file",
-                caused_by=error,
-            )
-
-    def formatted_with(self, context: ContextType) -> BaseMessage:
-        """Format the prompt template with the provided context.
-
-        Args:
-            context (ContextType): The context data to format the template with.
-
-        Returns:
-            BaseMessageType: The formatted LangChain BaseMessage object.
-
-        Raises:
-            ExpectedVariableType: If context is not of the expected Context subclass type.
-            CreationError: If an error occurs during message creation.
-        """
-        # Input validation
-        if not isinstance(context, self.context_type):
-            raise loggy.ExpectedVariableType(
-                var_name="context",
-                expected=self._context_type,
-                got=type(context),
-                with_value=context,
-            )
-
-        # Create appropriate message template
-        message_template: BaseMessagePromptTemplate | None = None
-        try:
-            match self.role_type:
-                case MessageRole.SYSTEM:
-                    message_template = SystemMessagePromptTemplate.from_template(
-                        self._raw_template
-                    )
-                case MessageRole.AI:
-                    from langchain.prompts import AIMessagePromptTemplate
-
-                    message_template = AIMessagePromptTemplate.from_template(
-                        self._raw_template
-                    )
-                case default:
-                    raise loggy.ValueError(
-                        f"Probably internal mistake that {default} is not assigned yet"
-                    )
-        except Exception as error:
-            raise loggy.CreationError(
-                object_type=BaseMessagePromptTemplate,
-                reason="Failed to create message template from raw template",
-                caused_by=error,
-                context_type=self.context_type,
-                role_type=self.role_type,
-                message_template=message_template,
-            )
-
-        # Format and return message
-        context_dict = context.to_dict()
-        try:
-            # Validate input variables match context keys
-            required_vars = set(message_template.input_variables)
-            provided_vars = set(context_dict.keys())
-
-            missing_vars = required_vars - provided_vars
-            if missing_vars:
-                raise loggy.ValueError(
-                    f"Missing required template variables: {options_to_str(sorted(missing_vars))}",
-                    required_variables=sorted(required_vars),
-                    provided_variables=sorted(provided_vars),
-                    missing_variables=sorted(missing_vars),
-                )
-
-            # Optional: Check for unused variables (warning only)
-            # NOTE: commented out because often context will have extra info
-            # unused_vars = provided_vars - required_vars
-            # if unused_vars:
-            #     loggy.warning(
-            #         f"Context contains unused variables: {options_to_str(sorted(unused_vars))}",
-            #         unused_variables=sorted(unused_vars),
-            #     )
-
-            return message_template.format(**context_dict)
-        except Exception as error:
-            raise loggy.CreationError(
-                object_type=self._role_type,
-                reason="Failed to format message template with context",
-                caused_by=error,
-                context_type=self.context_type,
-                role_type=self.role_type,
-                message_template=message_template,
-                context=context,
-                context_dict=context_dict,
-            )
-
-    def generated_with(self, context: ContextType) -> PromptGenerator:
-        """Generator that yields formatted messages given the context.
-
-        Args:
-            context (ContextType): The context data to format the template with.
-
-        Yields:
-            PromptGenerator: A generator yielding formatted BaseMessage objects.
-        """
-        while True:
-            yield self.formatted_with(context)
-
-    def __repr__(self) -> str:
-        return (
-            f"PromptTemplate(tag={self.template.value!r}, "
-            f"context_type={self.context_type.__name__}, "
-            f"role_type={self.role_type})"
-        )
-
-    def __str__(self) -> str:
-        return f"PromptTemplate for '{self.template.value}' with context type {self.context_type.__name__} and role {self.role_type}"
+def _is_prompt_file(file_path: Path) -> bool:
+    return file_path.name.endswith(".prompt.md")
 
 
-def get_prompt_template(tag: str) -> RegisteredPromptTemplate:
-    """Retrieves the prompt template content for a given file tag.
+def _parse_prompt_template(source: str) -> tuple[Template, set[str]]:
+    parsed_content = _jinja2_env.parse(source)
+    variables = meta.find_undeclared_variables(parsed_content)
+    template = _jinja2_env.from_string(source)
+    return template, variables
 
-    This function validates the input file tag, ensures it corresponds to a supported
-    prompt template, and reads the associated markdown file. If successful, it returns
-    the file's contents as a string. Otherwise, it raises appropriate exceptions for
-    invalid inputs or loading issues.
+
+def _variables_in_context(variables: set[str], context: type[Context]) -> bool:
+    """Check if all variables are present in the given context.
 
     Args:
-        file_tag (str): The tag identifying the prompt template file. Must be a string
-            and correspond to a supported template.
+        variables (set[str]): Set of variable names to check.
+        context (type[Context]): The context class to check against.
 
     Returns:
-        str: The contents of the markdown file associated with the file tag.
-
-    Raises:
-        ExpectedVariableType: If file_tag is not a string.
-        NoEntryError: If file_tag does not correspond to a supported template.
-        LoadError: If an error occurs while reading the markdown file.
+        bool: True if all variables are present in the context, False otherwise.
     """
+    return all(context.contains(variable) for variable in variables)
 
-    # Input validation
-    if not isinstance(tag, str):
-        raise loggy.ExpectedVariableType(var_name="tag", got=type(tag), expected=str)
 
-    # Return register prompt template
-    try:
-        return RegisteredPromptTemplate.from_tag(tag)
-    except Exception as error:
-        raise loggy.LoadError(
-            obj_or_key=tag,
-            load_from="registered prompt templates",
-            caused_by=error,
+def _load_prompt_file(
+    tag: PromptTags,
+) -> tuple[Template, NamedDict, type[Context]]:
+    # Get file path and if valid prompt file
+    file_path = _PROMPT_TEMPLATE_PATHS[tag]
+    if not _is_prompt_file(file_path):
+        raise ValueError(
+            f"Invalid file name '{file_path.name}' ('{file_path}'). "
+            "Expected '.prompt.md' file extension"
         )
 
+    # Check if file exists
+    if not file_path.exists():
+        raise FileNotFoundError(
+            f"Cannot find expected prompt file {file_path} from tag {tag!r}. "
+            "Ensure Astro is installed correctly."
+        )
 
-def get_chat_system_prompt(context: ChatContext | None = None) -> BaseMessage:
-    if context is None:
-        context = ChatContext()
-    return PromptTemplate[ChatContext]("chat-system").formatted_with(context)
+    # Load file with frontmatter
+    post = frontmatter.load(str(file_path))
+    metadata = post.metadata
+    source = post.content
+
+    # Parse template and add variables to metadata
+    template, variables = _parse_prompt_template(source)
+    metadata["variables"] = variables
+
+    # Check if context type is present and extract
+    if "context_type" not in metadata:
+        raise ValueError(f"Expected context_type entry in {tag!r} frontmatter. ")
+    context_type = select_context_type(str(metadata["context_type"]))
+
+    # Validate variables against context-type
+    if not _variables_in_context(variables, context_type):
+        missing_variables = [
+            variable for variable in variables if not context_type.contains(variable)
+        ]
+        missing_str = options_to_str(missing_variables, with_repr=True)
+        raise loggy.ValueError(
+            "Context missing fields for these prompt "
+            f"template variables: {missing_str}",
+            variables=variables,
+            context_type=context_type,
+            tag=tag,
+        )
+
+    # Return extracted values
+    return template, metadata, context_type
 
 
-def get_chat_welcome_prompt(context: ChatContext | None = None) -> BaseMessage:
-    if context is None:
-        context = ChatContext()
-    return PromptTemplate[ChatContext]("chat-welcome").formatted_with(context)
+def get_prompt_template(tag: PromptTags) -> Callable[[Context], str]:
+    template, meta, context_type = _load_prompt_file(tag)
+    variables = meta["variables"]
+
+    def formatter(context: Context) -> str:
+        if not isinstance(context, context_type):
+            raise loggy.ExpectedVariableType(
+                var_name="context", expected=context_type, got=type(context)
+            )
+        context_values = context.to_formatted()
+        return template.render(
+            {variable: context_values[variable] for variable in variables}
+        )
+
+    return formatter
 
 
-def get_chat_context_prompt_generator(
-    context: ChatContext | None = None,
-) -> PromptGenerator:
-    if context is None:
-        context = ChatContext()
-    return PromptTemplate[ChatContext]("chat-context").generated_with(context)
+def create_assistant_message(text: str) -> ModelResponse:
+    return ModelResponse(parts=[TextPart(content=text)])
 
 
-def get_chat_prompts(
-    context: ChatContext | None = None,
-) -> tuple[BaseMessage, BaseMessage, PromptGenerator]:
-    """Get the full set of chat prompts: system, context, and welcome.
-
-    Args:
-        context (ChatContext | None): The chat context to use. If None, a default context is created.
-
-    Returns:
-        list[BaseMessage]: A list of formatted BaseMessage objects for the chat prompts.
-    """
-    if context is None:
-        context = ChatContext()
-
-    system_prompt = get_chat_system_prompt(context)
-    welcome_prompt = get_chat_welcome_prompt(context)
-    context_generator = get_chat_context_prompt_generator(context)
-    return system_prompt, welcome_prompt, context_generator
+def create_system_message(text: str) -> ModelRequest:
+    return ModelRequest(parts=[SystemPromptPart(content=text)])
 
 
 if __name__ == "__main__":
-    from time import sleep
+    system_prompt = get_prompt_template("chat-system")
+    welcome_prompt = get_prompt_template("chat-welcome")
+    context_prompt = get_prompt_template("chat-context")
 
-    from astro.utilities.display import md_print
+    context = ChatContext()
+    from freezegun import freeze_time
 
-    prompt_template = PromptTemplate[ChatContext]("chat-context")
-    chat1 = ChatContext()
-    chat2 = ChatContext(datetime_live=False)
-
-    count = 3
-    md_print("## ChatContext1")
-    for message in PromptTemplate[ChatContext]("chat-context").generated_with(chat1):
-        md_print(f"**{message.type} Message:**\n\n{message.content}\n\n")
-        sleep(1)
-        count -= 1
-        if count <= 0:
-            break
-
-    md_print("## ChatContext2")
-    count = 3
-    for message in PromptTemplate[ChatContext]("chat-context").generated_with(chat2):
-        md_print(f"**{message.type} Message:**\n\n{message.content}\n\n")
-        sleep(1)
-        count -= 1
-        if count <= 0:
-            break
+    for i in range(1, 10):
+        with freeze_time(f"2025-01-01 {2 * i:002}:00:00"):
+            print(f"{system_prompt(context)=}")
+            print(f"{welcome_prompt(context)=}")
+            print(f"{context_prompt(context)=}")
+        input()

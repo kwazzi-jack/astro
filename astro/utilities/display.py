@@ -2,12 +2,16 @@ import json
 import math
 import shutil
 import textwrap
+from datetime import datetime
 from typing import IO, Any
 
-from langchain_core.messages import BaseMessage
+from pydantic_ai import ModelMessage, ModelResponse, SystemPromptPart, UserPromptPart
 from rich import print as rprint
 from rich.markdown import Markdown
+from rich.panel import Panel
 from rich.prompt import Prompt
+
+from astro.utilities.timing import get_datetime_str
 
 BASE_INDENT = 4
 SAST_DISPLAY_PATTERN = "%Y/%m/%d %H:%M:%S %Z (%z)"
@@ -41,24 +45,64 @@ def inline_list_format(items: list[str]) -> str:
 
 
 def astro_md_print(message: Any):
-    if isinstance(message, BaseMessage):
-        content = message.content
-    else:
-        content = message
-    md_print(f"> **ASTRO:**\n\n{content}\n")
+    md_print(f"> **ASTRO:**\n\n{message}\n")
 
 
 def user_md_print(message: Any):
-    if isinstance(message, BaseMessage):
-        content = message.content
-    else:
-        content = message
-    md_print(f"> **USER:**\n\n{content}\n")
+    md_print(f"> **USER:**\n\n{message}\n")
 
 
 def user_md_input() -> str:
     md_print("> **USER:**\n")
     return Prompt.ask("")
+
+
+def pretty_print_model_message(message: ModelMessage) -> None:
+    panel: Panel | None = None
+    if isinstance(message, ModelResponse):
+        panel = Panel(
+            Markdown(message.text or "None"),
+            title="ASSISTANT",
+            title_align="left",
+            subtitle=get_datetime_str(message.timestamp, to_local=True),
+            subtitle_align="right",
+            expand=True,
+            border_style="purple",
+        )
+        rprint(panel)
+    else:
+        for part in message.parts:
+            if isinstance(part, SystemPromptPart):
+                panel = Panel(
+                    Markdown(part.content or "None"),
+                    title="SYSTEM",
+                    title_align="left",
+                    subtitle=get_datetime_str(part.timestamp, to_local=True),
+                    subtitle_align="right",
+                    expand=True,
+                    border_style="red",
+                )
+            elif isinstance(part, UserPromptPart):
+                panel = Panel(
+                    Markdown(part.content if isinstance(part.content, str) else "None"),
+                    title="USER",
+                    title_align="left",
+                    subtitle=get_datetime_str(part.timestamp, to_local=True),
+                    subtitle_align="right",
+                    expand=True,
+                    border_style="green",
+                )
+            else:
+                panel = Panel(
+                    Markdown(part.content if isinstance(part.content, str) else "None"),
+                    title=type(part).__name__.upper(),
+                    title_align="left",
+                    subtitle=get_datetime_str(part.timestamp, to_local=True),
+                    subtitle_align="right",
+                    expand=True,
+                    border_style="blue",
+                )
+            rprint(panel)
 
 
 def get_terminal_shape() -> tuple[int, int]:

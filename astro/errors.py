@@ -1,18 +1,12 @@
 # --- Internal Imports ---
 from abc import ABC
-from collections.abc import Sequence
+from collections.abc import Collection, Mapping, Sequence
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, TypeVar
+from typing import Any, TypeVar
 
 # --- External Imports ---
-from sqlalchemy.exc import IntegrityError  # noqa: F401
-
 # --- Local Imports ---
 from astro.typings import (
-    HashableObject,
-    ImmutableRecord,
-    ModelName,
-    ModelProvider,
     NamedDict,
     RecordableModel,
     StrPath,
@@ -25,9 +19,6 @@ from astro.typings import (
 
 AstroErrorType = TypeVar("AstroErrorType", bound="AstroError")
 PythonErrorType = TypeVar("PythonErrorType", bound=Exception)
-
-if TYPE_CHECKING:
-    from astro.llms.base import LLMConfig
 
 
 class AstroError(ABC, Exception):
@@ -107,48 +98,6 @@ class SetupError(AstroError):
         super().__init__(
             message=f"Setup error occurred: {cause}", extra=extra, caused_by=caused_by
         )
-
-
-class RecordableIdentityError(AstroError):
-    """When the identity of two models are not the same when they should be."""
-
-    def __init__(
-        self,
-        *,
-        record: HashableObject,
-        other_record: HashableObject,
-        extra: NamedDict | None = None,
-        caused_by: Exception | None = None,
-    ) -> None:
-        # Model and record name
-        record_type = type_name(record)
-        other_record_type = type_name(other_record)
-
-        record_hash = (
-            hash(record) if isinstance(record, RecordableModel) else record.record_hash
-        )
-        other_record_hash = (
-            hash(other_record)
-            if isinstance(other_record, RecordableModel)
-            else other_record.record_hash
-        )
-
-        # Error details
-        extra = (extra or {}) | {
-            "record_type": type(record),
-            "record_hash": record_hash,
-            "other_record_type": type(other_record),
-            "other_record_hash": other_record_hash,
-        }
-
-        # Error message
-        message = (
-            f"Hash mistmatch between model {record_type} ({record_hash}) "
-            f"and record {other_record_type} ({other_record_hash})"
-        )
-
-        # Construct parent
-        super().__init__(message=message, extra=extra, caused_by=caused_by)
 
 
 class ExpectedVariableType(AstroError):
@@ -352,16 +301,42 @@ class ValueTypeError(ExpectedVariableType):
         )
 
 
+class EmptyStructureError(AstroError):
+    """Raised when a structure is expected to have elements but is empty.
+
+    This error provides detailed information about the empty structure,
+    including its name, type, and length.
+    """
+
+    def __init__(
+        self,
+        *,
+        structure_name: str,
+        structure_type: type[Collection[Any] | Mapping[Any, Any]],
+        extra: NamedDict | None = None,
+        caused_by: Exception | None = None,
+    ):
+        # Error details
+        extra = (extra or {}) | {
+            "structure_name": structure_name,
+            "structure_type": structure_type,
+        }
+
+        # Error message
+        message = (
+            f"Expected {structure_name!r} of type {structure_type.__name__} "
+            "to have elements, but it is empty"
+        )
+        # Construct parent
+        super().__init__(message=message, extra=extra, caused_by=caused_by)
+
+
 class NoEntryError(AstroError, KeyError):
     def __init__(
         self,
         *,
         key_value: Any,
-        sources: Sequence[str | RecordableModel | ImmutableRecord]
-        | str
-        | RecordableModel
-        | ImmutableRecord
-        | None = None,
+        sources: Sequence[str | RecordableModel] | str | RecordableModel | None = None,
         extra: NamedDict | None = None,
         caused_by: Exception | None = None,
     ):
@@ -369,7 +344,7 @@ class NoEntryError(AstroError, KeyError):
         extra = (extra or {}) | {"key_value": key_value}
 
         # Normalize sources to a sequence for consistent processing
-        sources_seq: Sequence[str | RecordableModel | ImmutableRecord] = []
+        sources_seq: Sequence[str | RecordableModel] = []
         if sources is not None:
             if isinstance(sources, Sequence) and not isinstance(sources, str):
                 sources_seq = sources
@@ -380,18 +355,14 @@ class NoEntryError(AstroError, KeyError):
             # Prepare formatted source descriptions for message
             formatted_sources = []
             object_hashes = []
-            for src in sources_seq:
-                if isinstance(src, (RecordableModel, ImmutableRecord)):
-                    object_type = type_name(type(src))
-                    object_hash = (
-                        hash(src)
-                        if isinstance(src, RecordableModel)
-                        else src.record_hash
-                    )
+            for source in sources_seq:
+                if isinstance(source, RecordableModel):
+                    object_type = type_name(type(source))
+                    object_hash = hash(source)
                     formatted_sources.append(f"{object_type} ({object_hash})")
                     object_hashes.append(object_hash)
                 else:
-                    formatted_sources.append(repr(src))
+                    formatted_sources.append(repr(source))
             if object_hashes:
                 extra["object_hash"] = (
                     object_hashes if len(object_hashes) > 1 else object_hashes[0]
@@ -415,7 +386,7 @@ class LoadError(AstroError):
         self,
         *,
         path_or_uid: StrPath | int | None = None,
-        obj_or_key: RecordableModel | ImmutableRecord | Any | None = None,
+        obj_or_key: RecordableModel | Any | None = None,
         load_from: str | None = None,
         extra: NamedDict | None = None,
         caused_by: Exception | None = None,
@@ -435,14 +406,10 @@ class LoadError(AstroError):
         message += f" {type_name(obj_or_key)}"
 
         # Object has hash
-        if isinstance(obj_or_key, (RecordableModel, ImmutableRecord)):
-            object_hash = (
-                hash(obj_or_key)
-                if isinstance(obj_or_key, RecordableModel)
-                else obj_or_key.record_hash
-            )
+        if isinstance(obj_or_key, RecordableModel):
+            object_hash = hash(obj_or_key)
             extra["object_hash"] = object_hash
-            message += f" ({object_hash})"
+            message += f" ({secretify(object_hash)})"
 
         message += " to"
 
@@ -475,7 +442,7 @@ class SaveError(AstroError):
         self,
         *,
         path_or_uid: StrPath | None = None,
-        obj_to_save: RecordableModel | ImmutableRecord | Any | None = None,
+        obj_to_save: RecordableModel | Any | None = None,
         save_to: str | None = None,
         extra: NamedDict | None = None,
         caused_by: Exception | None = None,
@@ -495,12 +462,8 @@ class SaveError(AstroError):
         message += f" {type_name(obj_to_save)}"
 
         # Object has hash
-        if isinstance(obj_to_save, (RecordableModel, ImmutableRecord)):
-            object_hash = (
-                hash(obj_to_save)
-                if isinstance(obj_to_save, RecordableModel)
-                else obj_to_save.record_hash
-            )
+        if isinstance(obj_to_save, RecordableModel):
+            object_hash = hash(obj_to_save)
             extra["object_hash"] = object_hash
             message += f" ({secretify(object_hash)})"
 
@@ -594,67 +557,6 @@ class ModelFileStoreError(AstroError):
         super().__init__(message=message, extra=extra, caused_by=caused_by)
 
 
-class LLMError(AstroError):
-    """Raised when an error occurs relating to LLMs."""
-
-    def __init__(
-        self,
-        *,
-        message: str,
-        model_identifier: str | ModelName | ModelProvider | None = None,
-        model_name: str | ModelName | ModelProvider | Any = None,
-        model_provider: str | ModelProvider | Any = None,
-        model_config: "LLMConfig | None" = None,
-        extra: NamedDict | None = None,
-        caused_by: Exception | None = None,
-    ):
-        # Error details
-        extra = extra or {}
-
-        if model_identifier is not None:
-            extra["model_identifier"] = model_identifier
-
-        if model_name is not None:
-            extra["model_name"] = model_name
-
-        if model_provider is not None:
-            extra["model_provider"] = model_provider
-
-        if model_config is not None:
-            extra["model_config"] = model_config.model_dump(mode="json")
-            extra["model_config_type"] = type(model_config)
-            extra["model_config_hash"] = hash(model_config)
-
-        super().__init__(message=message, extra=extra, caused_by=caused_by)
-
-
-class SupportError(AstroError):
-    """Raised when something is not supported by Astro."""
-
-    def __init__(
-        self,
-        *,
-        feature: str,
-        reason: str | None = None,
-        extra: NamedDict | None = None,
-        caused_by: Exception | None = None,
-    ):
-        # Error details
-        extra = extra or {}
-        extra["feature"] = feature
-
-        # Error message
-        message = f"'{feature}' is not supported by Astro"
-        if reason is not None and len(reason.strip()) > 0:
-            extra["reason"] = reason
-            message += f": {reason}"
-        else:
-            extra["reason"] = "unspecified"
-
-        # Construct parent
-        super().__init__(message=message, extra=extra, caused_by=caused_by)
-
-
 class CreationError(AstroError):
     """Raised when an error occurs during creation of an object."""
 
@@ -685,117 +587,8 @@ class CreationError(AstroError):
         super().__init__(message=message, extra=extra, caused_by=caused_by)
 
 
-# --- SQL Errors ---
-
-
-class SQLIntegrityError(AstroDatabaseError):
-    """Raised when a database integrity error occurs."""
-
-    def __init__(
-        self,
-        *,
-        operation: str,
-        reason: str | None = None,
-        database: str | None = None,
-        table: str
-        | type[ImmutableRecord[Any]]
-        | Sequence[type[ImmutableRecord[Any]]]
-        | None = None,
-        extra: NamedDict | None = None,
-        caused_by: Exception | None = None,
-    ):
-        # Error details
-        extra = extra or {}
-        extra["operation"] = operation
-
-        if database is not None:
-            extra["database"] = database
-
-        # Error message
-        message = f"Database integrity error during {operation} operation"
-
-        if table is not None:
-            extra["table"] = table
-            if isinstance(table, Sequence) and not isinstance(table, str):
-                message += " on tables " + options_to_str(
-                    [str(subtable.__tablename__) for subtable in table]
-                )
-            elif isinstance(table, type):
-                message += f" on table {table.__tablename__}"
-            else:
-                message += f" on table {table}"
-
-        if reason is not None and len(reason.strip()) > 0:
-            extra["reason"] = reason
-            message += f": {reason}"
-        else:
-            extra["reason"] = "unspecified"
-
-        # Construct parent
-        super().__init__(
-            message=message,
-            db_path=database,
-            db_type="SQL",
-            extra=extra,
-            caused_by=caused_by,
-        )
-
-
-class SQLRetrievalError(AstroDatabaseError):
-    """Raised when a database retrieval error occurs."""
-
-    def __init__(
-        self,
-        *,
-        operation: str,
-        reason: str | None = None,
-        database: str | None = None,
-        table: str
-        | type[ImmutableRecord[Any]]
-        | Sequence[type[ImmutableRecord[Any]]]
-        | None = None,
-        extra: NamedDict | None = None,
-        caused_by: Exception | None = None,
-    ):
-        # Error details
-        extra = extra or {}
-        extra["operation"] = operation
-
-        if database is not None:
-            extra["database"] = database
-
-        # Error message
-        message = f"Database retrieval error during {operation} operation"
-
-        if table is not None:
-            extra["table"] = table
-            if isinstance(table, Sequence) and not isinstance(table, str):
-                message += " on tables " + options_to_str(
-                    [str(subtable.__tablename__) for subtable in table]
-                )
-            elif isinstance(table, type):
-                message += f" on table {table.__tablename__}"
-            else:
-                message += f" on table {table}"
-
-        if reason is not None and len(reason.strip()) > 0:
-            extra["reason"] = reason
-            message += f": {reason}"
-        else:
-            extra["reason"] = "unspecified"
-
-        # Construct parent
-        super().__init__(
-            message=message,
-            db_path=database,
-            db_type="SQL",
-            extra=extra,
-            caused_by=caused_by,
-        )
-
-
 if __name__ == "__main__":
-    from astro.typings import ImmutableRecord, RecordableModel
+    from astro.typings import RecordableModel
 
     class TestModel(RecordableModel, frozen=True):
         id: int
