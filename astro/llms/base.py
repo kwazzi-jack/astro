@@ -101,13 +101,20 @@ class KnownModels:
     _identifier_to_details: ClassVar[dict[str, ModelDetails]] = {}
 
     @classmethod
-    def _init_class(cls, all_models: list[str]) -> None:
+    def _init_class(
+        cls,
+        all_models: list[str],
+        allowed_providers: set[str] | None = None,
+        allowed_online_models: set[str] | None = None,
+    ) -> None:
         # Only one initialization per import
         if cls._initialized:
             return
 
         # Get model details list
-        models = cls._parse_model_details(all_models)
+        models = cls._parse_model_details(
+            all_models, allowed_providers, allowed_online_models
+        )
 
         # No models registered -> Panic
         if len(models) == 0:
@@ -125,8 +132,15 @@ class KnownModels:
         cls._initialized = True
 
     @classmethod
-    def _parse_model_details(cls, all_models: list[str]) -> list[ModelDetails]:
+    def _parse_model_details(
+        cls,
+        all_models: list[str],
+        allowed_providers: set[str] | None = None,
+        allowed_online_models: set[str] | None = None,
+    ) -> list[ModelDetails]:
         result = []
+        allowed_providers = allowed_providers or set()
+        allowed_online_models = allowed_online_models or set()
         for identifier in all_models:
             # TODO: Implement huggingface models
             # Turned off to avoid conflicting identifier names
@@ -134,7 +148,12 @@ class KnownModels:
                 continue
 
             try:
-                result.append(ModelDetails.from_identifier(identifier))
+                model = ModelDetails.from_identifier(identifier)
+                if model.provider in allowed_providers and (
+                    model.to_identifier() in allowed_online_models
+                    or model.source == "ollama"
+                ):
+                    result.append(ModelDetails.from_identifier(identifier))
             except Exception as error:
                 loggy.exception(error)
                 loggy.warning(f"Failed to register model: {identifier!r}")
@@ -219,27 +238,54 @@ _PYDANTIC_AI_MODELS: list[str] = literal_to_list(_KnownModelName.__value__)[
 _LOCAL_MODELS: list[str] = _available_local_models()  # NOTE: Based on Ollama for now
 _MODELS = _PYDANTIC_AI_MODELS + _LOCAL_MODELS  # NOTE: Combined list
 
-# Initialize KnownModels (once)
-KnownModels._init_class(_MODELS)
-
-# Restricted Providers
-_WHITE_LIST_PROVIDERS = {
-    "openai",
-    "anthropic",
-    "ollama",
-    "google-vertex",
-    "google-gla",
-    "deepseek",
+# Allowed providers
+_ALLOWED_PROVIDERS = {"openai", "anthropic", "ollama"}
+_ALLOWED_ONLINE_MODELS = {
+    "anthropic:claude-opus-4-0",
+    "anthropic:claude-sonnet-4-0",
+    "anthropic:claude-sonnet-4-5",
+    "openai:chatgpt-4o-latest",
+    "openai:codex-mini-latest",
+    "openai:gpt-4.1",
+    "openai:gpt-4.1-mini",
+    "openai:gpt-4.1-nano",
+    "openai:gpt-4o",
+    "openai:gpt-4o-mini",
+    "openai:gpt-5",
+    "openai:gpt-5-chat-latest",
+    "openai:gpt-5-mini",
+    "openai:gpt-5-nano",
+    "openai:o1",
+    "openai:o1-mini",
+    "openai:o1-preview",
+    "openai:o1-pro",
+    "openai:o3",
+    "openai:o3-deep-research",
+    "openai:o3-mini",
+    "openai:o3-pro",
+    "openai:o4-mini",
+    "openai:o4-mini-deep-research",
 }
+
+# Initialize KnownModels (once)
+KnownModels._init_class(_MODELS, _ALLOWED_PROVIDERS, _ALLOWED_ONLINE_MODELS)
 
 
 # NOTE: Based on and uses `pydantic_ai.models.infer_model`
 def infer_model(model_details: ModelDetails) -> Model:
     # NOTE: Restricting for now
-    if model_details.provider not in _WHITE_LIST_PROVIDERS:
-        error_msg = options_to_str(list(_WHITE_LIST_PROVIDERS), with_repr=True)
+    if model_details.provider not in _ALLOWED_PROVIDERS:
+        error_msg = options_to_str(list(_ALLOWED_PROVIDERS), with_repr=True)
         raise loggy.NotImplementedError(
             f"Astro does not support {model_details.provider!r}. Try: {error_msg}"
+        )
+    if (
+        model_details.internal not in _ALLOWED_ONLINE_MODELS
+        and model_details.source != "ollama"
+    ):
+        error_msg = options_to_str(list(_ALLOWED_ONLINE_MODELS), with_repr=True)
+        raise loggy.NotImplementedError(
+            f"Astro does not support online model {model_details.internal!r}. Try Ollama models or {error_msg}"
         )
     # Ollama model
     if model_details.source == "ollama":  # Only Ollama for now
@@ -272,32 +318,6 @@ def create_llm_model(identifier: str) -> Model:
 
 
 if __name__ == "__main__":
-    from dotenv import load_dotenv
-    from rich.console import Console
-
-    load_dotenv()
-
-    console = Console()
-    identifiers = KnownModels.identifiers()
-    count = 0
-    total = len(identifiers)
-
-    for i, identifier in enumerate(identifiers, start=1):
-        try:
-            model = create_llm_model(identifier)
-            details = KnownModels.parse(identifier)
-            count += 1
-            style = "green"
-        except Exception:
-            details = None
-            model = None
-            style = "red"
-
-        model_str = (
-            f"{type(model).__name__} (name={details.name!r}, provider={details.provider!r}, variant={details.variant!r}, source={details.source!r})"
-            if model and details
-            else "Nope"
-        )
-        console.print(f"({i:02}/{total}) {identifier}: {model_str}", style=style)
-
-    console.print(f"Total correct: {count}/{total} ({count / total:.2g}%)")
+    # List all models
+    for identifier in KnownModels.identifiers():
+        print(identifier)

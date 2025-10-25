@@ -1,11 +1,22 @@
 import re
+from collections.abc import Callable, Generator, Iterable
 from datetime import datetime, timezone
+from time import time
 
 ASTRO_DATETIME_FORMAT = "%Y/%m/%d %H:%M:%S.%f UTC%z"
 
 
-def get_datetime_now() -> datetime:
-    return datetime.now().astimezone()
+def get_datetime_now(to_local: bool = True) -> datetime:
+    """Get the current timezone-aware datetime.
+
+    Args:
+        to_local (bool): If True, return the current time in the local timezone.
+            Otherwise, return time in UTC.
+
+    Returns:
+        datetime: Current datetime in the requested timezone.
+    """
+    return datetime.now().astimezone() if to_local else datetime.now(timezone.utc)
 
 
 def get_timestamp(
@@ -33,26 +44,56 @@ def timestamp_to_local(timestamp: str, pattern: str = ASTRO_DATETIME_FORMAT) -> 
     return get_timestamp(datetime_to_local(from_timestamp(timestamp, pattern)), pattern)
 
 
-def get_date_str(dt: datetime) -> str:
-    return dt.strftime("%A, %d %B %Y")
-
-
-def get_time_str(dt: datetime) -> str:
-    time_base = dt.strftime("%H:%M:%S.%f")[:-4]
-    time_offset = dt.strftime("(%Z%z)")
-    return f"{time_base} {time_offset}"
-
-
-def get_datetime_str(dt: datetime, to_local: bool = False) -> str:
-    if to_local:
+def get_date_str(
+    pattern: str = "%A, %d %B %Y",
+    dt: datetime | None = None,
+    to_local: bool = True,
+) -> str:
+    if dt is None:
+        current_dt = get_datetime_now(to_local=to_local)
+    elif to_local:
         current_dt = datetime_to_local(dt)
     else:
         current_dt = dt
-    return f"{get_time_str(current_dt)}, {get_date_str(current_dt)}"
+    return current_dt.strftime(pattern)
 
 
-def get_day_period_str(dt: datetime) -> str:
-    hour = dt.hour
+def get_time_str(
+    pattern: str = "%H:%M:%S.%f%z",
+    dt: datetime | None = None,
+    to_local: bool = True,
+) -> str:
+    if dt is None:
+        current_dt = get_datetime_now(to_local=to_local)
+    elif to_local:
+        current_dt = datetime_to_local(dt)
+    else:
+        current_dt = dt
+    return current_dt.strftime(pattern)
+
+
+def get_datetime_str(
+    pattern: str = "%H:%M:%S.%f%z, %A, %d %B %Y",
+    dt: datetime | None = None,
+    to_local: bool = True,
+) -> str:
+    if dt is None:
+        current_dt = get_datetime_now(to_local=to_local)
+    elif to_local:
+        current_dt = datetime_to_local(dt)
+    else:
+        current_dt = dt
+    return current_dt.strftime(pattern)
+
+
+def get_day_period_str(dt: datetime | None = None, to_local: bool = True) -> str:
+    if dt is None:
+        current_dt = get_datetime_now(to_local=to_local)
+    elif to_local:
+        current_dt = datetime_to_local(dt)
+    else:
+        current_dt = dt
+    hour = current_dt.hour
     if 0 <= hour < 12:
         return "morning"
     elif 12 <= hour < 17:
@@ -152,8 +193,86 @@ def strtime_to_seconds(time_str: str) -> float:
     return value * unit_map[unit]
 
 
-if __name__ == "__main__":
-    now = get_datetime_now()
-    print(f"{get_date_str(now)=}")
-    print(f"{get_time_str(now)=}")
-    print(f"{get_day_period_str(now)=}")
+def seconds_to_strtime(value: float) -> str:
+    """
+    Convert a time value in seconds to a human-readable string with appropriate units.
+
+    Returns up to two unit components for better readability (e.g., '2min 18.5s', '2h 20min').
+    Seconds are displayed with one decimal place precision.
+
+    Args:
+        value: Time value in seconds
+
+    Returns:
+        str: Human-readable time string with up to two unit components
+
+    Examples:
+        >>> seconds_to_strtime(5)
+        '0.5s'
+        >>> seconds_to_strtime(3_600)
+        '1h 0m'
+        >>> nanoseconds_to_strtime(138)
+        '2m 18.0s'
+        >>> seconds_to_strtime(7_200)
+        '2h 0m'
+    """
+    abs_value = abs(value)
+    sign = "-" if value < 0 else ""
+
+    # Define unit conversions in descending order (only hours, minutes, seconds)
+    units = [
+        ("h", 3_600),
+        ("m", 60),
+        ("s", 1),
+    ]
+
+    # Find the largest applicable unit
+    parts = []
+    remaining = abs_value
+
+    for unit_name, unit_value in units:
+        if remaining >= unit_value:
+            if unit_name == "s":
+                # For seconds, show one decimal place
+                count = remaining / unit_value
+                parts.append(f"{sign}{count:.1f}{unit_name}")
+                remaining = 0
+            else:
+                # For hours and minutes, show whole numbers
+                count = remaining // unit_value
+                parts.append(f"{sign}{int(count)}{unit_name}")
+                remaining = remaining % unit_value
+
+            sign = ""  # Only apply sign to first component
+
+    # If no parts were added (value is less than 1 second), return '0.0s'
+    if not parts:
+        return "<0.1s"
+
+    return " ".join(parts)
+
+
+def create_timer() -> tuple[Callable[[], None], Callable[[bool], float]]:
+    start_value = 0
+
+    def start():
+        nonlocal start_value
+        start_value = time()
+
+    def stop(reset: bool) -> float:
+        nonlocal start_value
+
+        # No value to return
+        if start_value == 0:
+            return 0
+
+        # Calculate time
+        result = time() - start_value
+
+        # Reset if set
+        if reset:
+            start_value = 0
+
+        return result
+
+    return start, stop

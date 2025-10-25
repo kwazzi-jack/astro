@@ -750,6 +750,7 @@ _STORES_DIR: Path | None = None
 _CONVERSATIONS_DIR: Path | None = None
 _DATA_DIR: Path | None = None
 REPOSITORY_DIR: Path | None = None
+APPSTATE_PATH: Path | None = None
 
 # Paths setup flag
 _PATH_SETUP_DONE = False
@@ -770,6 +771,7 @@ def setup_paths():
         _STORES_DIR, \
         _DATA_DIR, \
         REPOSITORY_DIR, \
+        APPSTATE_PATH, \
         _PATH_SETUP_DONE
 
     if _PATH_SETUP_DONE:
@@ -805,6 +807,9 @@ def setup_paths():
 
         REPOSITORY_DIR = _DATA_DIR / "repository"
         REPOSITORY_DIR.mkdir(exist_ok=True)
+
+        # Path to application state
+        APPSTATE_PATH = _STATE_DIR / "appstate"
 
     # Something went wrong when setting up paths
     except Exception as error:  # NOTE - Non-loggy errors that occur before logger setup

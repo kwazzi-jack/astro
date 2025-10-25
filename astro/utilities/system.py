@@ -9,6 +9,10 @@ import distro
 from pydantic import BaseModel, Field
 
 
+def get_users_name() -> str:
+    return os.getlogin()
+
+
 def is_exe_installed(exe_name: str) -> bool:
     return shutil.which(exe_name) is not None
 
