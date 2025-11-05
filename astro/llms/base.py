@@ -27,7 +27,7 @@ from pydantic_ai.models import infer_model as _infer_model
 from pydantic_ai.providers.ollama import OllamaProvider
 
 # --- Local Imports ---
-from astro.loggings.base import get_loggy
+from astro.logger import get_loggy
 from astro.typings import literal_to_list, options_to_str
 
 # --- GLOBALS ---
@@ -40,6 +40,7 @@ def _is_ollama_identifier(identifier: str) -> bool:
 
 def _available_local_models() -> list[str]:
     return [f"ollama:{entry.model}" for entry in ollama.list().models]
+
 
 
 StrName: TypeAlias = Annotated[

@@ -1,20 +1,3 @@
-"""
-astro/llms/prompts.py
-
-LLM-powered hybrid context management system for AI prompt generation.
-
-Author(s):
-    - Brian Welman
-Date: 2025-08-14
-License: MIT
-
-Description:
-    Simplified hybrid context system that uses LLMs to generate natural language
-    descriptions from structured context data. Combines the best of structured
-    data validation with AI-powered natural language generation.
-
-"""
-
 # --- Internal Imports ---
 import re
 from collections.abc import Callable
@@ -28,12 +11,12 @@ from pydantic_ai import ModelRequest, ModelResponse, SystemPromptPart, TextPart
 
 # --- Local Imports ---
 from astro.llms.contexts import ChatContext, Context, select_context_type
-from astro.loggings import get_loggy
+from astro.logger import get_loggy
 from astro.paths import get_module_dir
 from astro.typings import NamedDict, options_to_str
 
 # --- Globals ---
-loggy = get_loggy(__file__)
+_loggy = get_loggy(__file__)
 
 
 # Path to prompts
@@ -53,11 +36,11 @@ _jinja2_env = Environment(
 
 # Registered prompt templates
 _PROMPT_TEMPLATE_PATHS = {
-    "chat-system": (_PROMPT_DIR / "chat-system.prompt.md").resolve(),
-    "chat-welcome": (_PROMPT_DIR / "chat-welcome.prompt.md").resolve(),
-    "chat-context": (_PROMPT_DIR / "chat-context.prompt.md").resolve(),
+    "#chat-system": (_PROMPT_DIR / "chat-system.prompt.md").resolve(),
+    "#chat-welcome": (_PROMPT_DIR / "chat-welcome.prompt.md").resolve(),
+    "#chat-context": (_PROMPT_DIR / "chat-context.prompt.md").resolve(),
 }
-PromptTags = Literal["chat-system", "chat-welcome", "chat-context"]
+PromptTags = Literal["#chat-system", "#chat-welcome", "#chat-context"]
 
 # Regex globals
 ALPHA = r"[a-z]"
@@ -97,14 +80,14 @@ def _load_prompt_file(
     # Get file path and if valid prompt file
     file_path = _PROMPT_TEMPLATE_PATHS[tag]
     if not _is_prompt_file(file_path):
-        raise ValueError(
+        raise _loggy.ValueError(
             f"Invalid file name '{file_path.name}' ('{file_path}'). "
             "Expected '.prompt.md' file extension"
         )
 
     # Check if file exists
     if not file_path.exists():
-        raise FileNotFoundError(
+        raise _loggy.FileNotFoundError(
             f"Cannot find expected prompt file {file_path} from tag {tag!r}. "
             "Ensure Astro is installed correctly."
         )
@@ -120,7 +103,7 @@ def _load_prompt_file(
 
     # Check if context type is present and extract
     if "context_type" not in metadata:
-        raise ValueError(f"Expected context_type entry in {tag!r} frontmatter. ")
+        raise _loggy.ValueError(f"Expected context_type entry in {tag!r} frontmatter. ")
     context_type = select_context_type(str(metadata["context_type"]))
 
     # Validate variables against context-type
@@ -129,7 +112,7 @@ def _load_prompt_file(
             variable for variable in variables if not context_type.contains(variable)
         ]
         missing_str = options_to_str(missing_variables, with_repr=True)
-        raise loggy.ValueError(
+        raise _loggy.ValueError(
             "Context missing fields for these prompt "
             f"template variables: {missing_str}",
             variables=variables,
@@ -147,7 +130,7 @@ def get_prompt_template(tag: PromptTags) -> Callable[[Context], str]:
 
     def formatter(context: Context) -> str:
         if not isinstance(context, context_type):
-            raise loggy.ExpectedVariableType(
+            raise _loggy.ExpectedVariableType(
                 var_name="context", expected=context_type, got=type(context)
             )
         context_values = context.to_formatted()
@@ -164,19 +147,3 @@ def create_assistant_message(text: str) -> ModelResponse:
 
 def create_system_message(text: str) -> ModelRequest:
     return ModelRequest(parts=[SystemPromptPart(content=text)])
-
-
-if __name__ == "__main__":
-    system_prompt = get_prompt_template("chat-system")
-    welcome_prompt = get_prompt_template("chat-welcome")
-    context_prompt = get_prompt_template("chat-context")
-
-    context = ChatContext()
-    from freezegun import freeze_time
-
-    for i in range(1, 10):
-        with freeze_time(f"2025-01-01 {2 * i:002}:00:00"):
-            print(f"{system_prompt(context)=}")
-            print(f"{welcome_prompt(context)=}")
-            print(f"{context_prompt(context)=}")
-        input()

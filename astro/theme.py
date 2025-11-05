@@ -1,3 +1,5 @@
+"""Styling, lexer, and completer utilities for the Astro CLI."""
+
 # --- Internal Imports ---
 import bisect
 import itertools
@@ -5,39 +7,714 @@ import math
 import random
 import re
 import shutil
+import textwrap
 from collections.abc import Callable, Iterable
+from dataclasses import dataclass
+from datetime import datetime
+from typing import Literal, TypeAlias, overload
 
 # --- External Imports ---
 from colour import Color
-from prompt_toolkit import HTML
+from prompt_toolkit import HTML, prompt
 from prompt_toolkit.application.current import get_app
 from prompt_toolkit.completion import Completer, Completion, FuzzyWordCompleter
-from prompt_toolkit.formatted_text import FormattedText
+from prompt_toolkit.cursor_shapes import CursorShape
+from prompt_toolkit.output import ColorDepth
+from prompt_toolkit.shortcuts import CompleteStyle
 from prompt_toolkit.styles import BaseStyle, Style, merge_styles
 from prompt_toolkit.styles.pygments import style_from_pygments_dict
+from prompt_toolkit.validation import ValidationError, Validator
+from pydantic import BaseModel
 from pygments.lexer import RegexLexer
 from pygments.token import Generic, Name, Text
 from rich.align import Align as RichAlign
 from rich.console import Group
+from rich.theme import Theme
+from rich.markdown import Markdown
 
 # --- Local Imports ---
 from astro.llms.base import KnownModels, ModelDetails
-from astro.loggings.base import get_loggy
+from astro.logger import get_loggy
 from astro.meta import get_astro_version
+from astro.typings import (
+    DateTimeFactory,
+    HTMLDict,
+    HTMLFactory,
+    PTKDecoration,
+    StrDict,
+    StringFactory,
+)
 from astro.utilities.display import get_terminal_width
+from astro.utilities.timing import get_time_str, seconds_to_strtime
 
 # --- GLOBALS ---
 _loggy = get_loggy(__file__)
 
 
+# --- Theme Helper Functions and Classes ---
+def _apply_bold_html(text: str) -> str:
+    """Applies the bold html tags to text."""
+    return f"<b>{text}</b>"
+
+
+def _apply_italic_html(text: str) -> str:
+    """Applies the italics html tags to text."""
+    return f"<i>{text}</i>"
+
+
+def _apply_underline_html(text: str) -> str:
+    """Applies the underline html tags to text."""
+    return f"<u>{text}</u>"
+
+
+def _apply_strikethrough_html(text: str) -> str:
+    """Applies the strikethrough html tags to text."""
+    return f"<s>{text}</s>"
+
+def _apply_bold_md(text: str) -> str:
+    """Applies the bold on markdown text."""
+    return f"**{text}**"
+
+
+def _apply_italic_md(text: str) -> str:
+    """Applies the italics on markdown text."""
+    return f"*{text}*"
+
+
+def _apply_strikethrough_md(text: str) -> str:
+    """Applies the strikethrough on markdown text."""
+    return f"~~{text}~~"
+
+
+def _get_ptk_app_width() -> int:
+    """Gets the current width of the prompt session terminal."""
+    return get_app().output.get_size().columns
+
+
+class AstroStyle(BaseModel):
+    fg: str | None = None
+    bg: str | None = None
+    bold: bool = False
+    italic: bool = False
+    decoration: PTKDecoration = "none"
+    ignore_trailing_spaces: bool = False
+
+
+def _apply_ptk_style1(
+    text: str,
+    *,
+    fg: str | None = None,
+    bg: str | None = None,
+    bold: bool = False,
+    italic: bool = False,
+    decoration: Literal["underline", "strikethrough", "none"] = "none",
+    ignore_trailing_spaces: bool = False,
+) -> HTML:
+    """Applies prompt_toolkit styling to the text and returns an HTML object."""
+    style_str_parts = []
+
+    # Apply foreground
+    if fg is not None:
+        style_str_parts.append(f"{fg=}")
+
+    # Apply background
+    if bg is not None:
+        style_str_parts.append(f"{bg=}")
+
+    # Construct style string
+    style_str = " ".join(style_str_parts)
+
+    # Whether to format trailing spaces
+    if ignore_trailing_spaces:
+        leading_count = len(text) - len(text.lstrip())
+        trailing_count = len(text) - len(text.rstrip())
+        stripped_text = text.strip()
+        stripped_html_str = (
+            f"<style {style_str}>{stripped_text}</style>"
+            if len(style_str) > 0
+            else text
+        )
+        html_str = " " * leading_count + stripped_html_str + " " * trailing_count
+    else:
+        html_str = f"<style {style_str}>{text}</style>" if len(style_str) > 0 else text
+
+    # Apply bold weight
+    if bold:
+        html_str = _apply_bold_html(html_str)
+
+    # Apply italic style
+    if italic:
+        html_str = _apply_italic_html(html_str)
+
+    # Apply decoration
+    match decoration:
+        case "underline":
+            html_str = _apply_underline_html(html_str)
+        case "strikethrough":
+            html_str = _apply_strikethrough_html(html_str)
+
+    # Return as HTML object
+    return HTML(html_str)
+
+
+def _apply_ptk_style2(text: str, style: AstroStyle | None = None) -> HTML:
+    """Applies prompt_toolkit styling to the text and returns an HTML object."""
+    return _apply_ptk_style1(
+        text, **style.model_dump() if style is not None else AstroStyle().model_dump()
+    )
+
+
+def _apply_rich_style1(
+    text: str,
+    *,
+    fg: str | None = None,
+    bg: str | None = None,
+    bold: bool = False,
+    italic: bool = False,
+    decoration: Literal["underline", "strikethrough", "none"] = "none",
+    ignore_trailing_spaces: bool = False,
+) -> str:
+    """Applies Rich markup styling to the text and returns a formatted string."""
+    # Escape the text first to prevent Rich markup interpretation
+    escaped_text = escape_rich_markup(text)
+
+    # Whether to format trailing spaces
+    if ignore_trailing_spaces:
+        leading_count = len(text) - len(text.lstrip())
+        trailing_count = len(text) - len(text.rstrip())
+        stripped_text = text.strip()
+        escaped_text = escape_rich_markup(stripped_text)
+        result = " " * leading_count + escaped_text + " " * trailing_count
+    else:
+        result = escaped_text
+
+    # Build style parts
+    style_parts = []
+
+    # Apply bold
+    if bold:
+        style_parts.append("bold")
+
+    # Apply italic
+    if italic:
+        style_parts.append("italic")
+
+    # Apply decoration
+    if decoration == "underline":
+        style_parts.append("underline")
+    elif decoration == "strikethrough":
+        style_parts.append("strike")
+
+    # Apply foreground
+    if fg is not None:
+        style_parts.append(fg)
+
+    # Apply background
+    if bg is not None:
+        style_parts.append(f"on {bg}")
+
+    # Construct final markup
+    if style_parts:
+        style_str = " ".join(style_parts)
+        return f"[{style_str}]{result}[/{style_str}]"
+    else:
+        return result
+
+
+def _apply_rich_style2(text: str, style: AstroStyle | None = None) -> str:
+    """Applies Rich markup styling to the text and returns a formatted string."""
+    return _apply_rich_style1(
+        text, **style.model_dump() if style is not None else AstroStyle().model_dump()
+    )
+
+def _apply_markdown_style1(text: str, style: AstroStyle | None = None) -> Markdown:
+
+
+def join_html_obj(*objs: HTML | str, separator: str = "") -> HTML:
+    """Joins multiple HTML objects into a single HTML object."""
+    return HTML(
+        separator.join(obj.value if isinstance(obj, HTML) else obj for obj in objs)
+    )
+
+
+@dataclass(frozen=True)
+class PromptConfiguration:
+    """Configuration container for constructing the interactive prompt session.
+
+    Attributes:
+        prompt_prefix (HTMLFactory): Callable that returns the prefix
+            markup before user input.
+        placeholder (HTML): Placeholder markup displayed when the input is
+            empty.
+        bottom_toolbar (StringFactory): Callable that renders the toolbar
+            content at the bottom.
+        completer (Completer): Prompt_toolkit completer configured for commands
+            and hashtags.
+        lexer_cls (type[RegexLexer]): Lexer class used for inline syntax
+            highlighting.
+        style (BaseStyle): Prompt_toolkit style merging pygments and UI
+            selectors.
+        color_depth (ColorDepth): Desired output color depth for the prompt
+            session. Defaults to ColorDepth.TRUE_COLOR.
+        complete_style (CompleteStyle): Completion menu arrangement strategy.
+            Defaults to CompleteStyle.COLUMN.
+        complete_in_thread (bool): Whether completion resolution should occur in
+            a background thread. Defaults to True.
+        complete_while_typing (bool): Whether completions should appear while
+            the user types. Defaults to True.
+        validator (Validator | None): Optional validator applied to prompt
+            input. Defaults to None.
+        validate_while_typing (bool): Whether validation feedback should appear
+            while typing. Defaults to False.
+        refresh_interval (float): UI refresh interval for dynamic components in
+            seconds. Defaults to 0.1.
+        wrap_lines (bool): Whether lines should wrap within the prompt.
+            Defaults to True.
+        cursor_shape (CursorShape): Cursor shape displayed within the prompt.
+            Defaults to CursorShape.BLINKING_BLOCK.
+    """
+
+    prompt_prefix: HTMLFactory
+    placeholder: HTML
+    bottom_toolbar: StringFactory
+    completer: Completer
+    lexer_cls: type[RegexLexer]
+    style: BaseStyle
+    color_depth: ColorDepth = ColorDepth.TRUE_COLOR
+    complete_style: CompleteStyle = CompleteStyle.COLUMN
+    complete_in_thread: bool = True
+    complete_while_typing: bool = True
+    validator: Validator | None = None
+    validate_while_typing: bool = False
+    refresh_interval: float = 0.1
+    wrap_lines: bool = True
+    cursor_shape: CursorShape = CursorShape.BLINKING_BLOCK
+
+
+@dataclass(frozen=True)
+class RuleStyle:
+    """Describe the rendering details for Rich console rules.
+
+    Attributes:
+        text (str): Label rendered at the center of the rule.
+            Defaults to an empty string.
+        character (str): Character used to draw the horizontal line.
+            Defaults to "─".
+        style (str | Style | None): Optional Rich style expression or Style
+            instance applied to the rule. Defaults to None.
+        align (Literal['left', 'center', 'right']): Alignment of the label
+            within the rule. Defaults to "center".
+        newline (bool): Whether to print a trailing newline after the rule.
+            Defaults to False.
+    """
+
+    text: str = ""
+    character: str = "─"
+    style: str | Style | None = None
+    align: Literal["left", "center", "right"] = "center"
+    newline: bool = False
+
+
+@dataclass(frozen=True)
+class ModelSelectionResult:
+    """Container describing the outcome of the model selection prompt.
+
+    Attributes:
+        identifier (str): Identifier chosen by the user.
+        styled_identifier (str): Rich markup for the identifier presentation.
+        details (ModelDetails): Parsed model details for downstream usage.
+    """
+
+    identifier: str
+    styled_identifier: str
+    details: ModelDetails
+
+
+def create_ptk_prompt_prefix(
+    name: str,
+    symbol: str = "⟩",
+    name_style: AstroStyle | None = None,
+    symbol_style: AstroStyle | None = None,
+    append_spaces: int | None = None,
+) -> HTML:
+    name_html = _apply_ptk_style2(name, style=name_style)
+    symbol_html = _apply_ptk_style2(symbol, style=symbol_style)
+    if append_spaces is not None and append_spaces >= 0:
+        symbol_html = join_html_obj(symbol_html, " " * append_spaces)
+    return join_html_obj(
+        name_html,
+        symbol_html,
+        separator=" ",
+    )
+
+
+def create_ptk_prompt_prefix_factory(
+    name_or_provider: str | StringFactory,
+    symbol_or_provider: str | StringFactory = "⟩",
+    name_style: AstroStyle | None = None,
+    symbol_style: AstroStyle | None = None,
+    append_spaces: int | None = None,
+) -> HTMLFactory:
+    # Normalize providers to callable functions
+    if callable(name_or_provider):
+        name_provider = name_or_provider
+    else:
+
+        def name_provider() -> str:
+            return name_or_provider
+
+    if callable(symbol_or_provider):
+        symbol_provider = symbol_or_provider
+    else:
+
+        def symbol_provider() -> str:
+            return symbol_or_provider
+
+    def create_prompt_inner() -> HTML:
+        return create_ptk_prompt_prefix(
+            name_provider(),
+            symbol_provider(),
+            name_style=name_style,
+            symbol_style=symbol_style,
+            append_spaces=append_spaces,
+        )
+
+    return create_prompt_inner
+
+
+def create_rich_prompt_prefix(
+    name: str,
+    symbol: str = "⟩",
+    name_style: AstroStyle | None = None,
+    symbol_style: AstroStyle | None = None,
+    append_spaces: int | None = None,
+) -> str:
+    name_markup = _apply_rich_style2(name, style=name_style)
+    symbol_markup = _apply_rich_style2(symbol, style=symbol_style)
+    return (
+        name_markup + symbol_markup + " " * append_spaces
+        if append_spaces is not None and append_spaces >= 0
+        else ""
+    )
+
+
+def create_user_prompt_style() -> AstroStyle:
+    return AstroStyle(fg=SECONDARY_COLOR)
+
+
+def create_astro_prompt_style() -> AstroStyle:
+    return AstroStyle(fg=PRIMARY_COLOR)
+
+
+def create_system_prompt_style() -> AstroStyle:
+    return AstroStyle(fg=TEXT_SECONDARY)
+
+
+def create_bottom_toolbar_factory(
+    model_identifier_provider: StringFactory,
+    datetime_provider: DateTimeFactory,
+) -> StringFactory:
+    """Create a callable that renders the bottom toolbar with lightweight metadata.
+
+    Args:
+        model_identifier_provider (StringFactory): Provider returning the
+            active model identifier string.
+        datetime_provider (DateTimeFactory): Provider returning the
+            current datetime value.
+
+    Returns:
+        StringFactory: Callable producing the toolbar string for
+        prompt_toolkit.
+    """
+
+    # Create toolbar string factory function
+    def draw_toolbar() -> str:
+        # Select current model
+        current_model = model_identifier_provider()
+        left = f" {current_model}"
+
+        # Get current datetime and format
+        dt_value = datetime_provider()
+        timestamp = get_time_str("%H:%M:%S", dt_value)
+        right = f" {timestamp} "
+
+        # Get width and calculate spacing
+        width = _get_ptk_app_width()
+        space_count = max(0, width - len(left) - len(right))
+        spacing = " " * space_count
+
+        # Return padded format string
+        return left + spacing + right
+
+    return draw_toolbar
+
+
+def create_prompt_configuration(
+    username_provider: StringFactory,
+    model_identifier_provider: StringFactory,
+    datetime_provider: DateTimeFactory,
+    command_metadata: StrDict,
+    hashtag_metadata: StrDict,
+) -> PromptConfiguration:
+    """Create the prompt configuration for the interactive CLI session.
+
+    Args:
+        username_provider (StringFactory): Provider returning the active
+            username.
+        model_identifier_provider (StringFactory): Provider returning the
+            active model identifier.
+        datetime_provider (DateTimeFactory): Provider returning the
+            current datetime.
+        command_metadata (StrDict): Mapping of command names to their
+            descriptions.
+        hashtag_metadata (StrDict): Mapping of hashtag trigger strings to
+            their descriptions.
+
+    Returns:
+        PromptConfiguration: Configuration object tailored for the Astro CLI
+        prompt session.
+    """
+    name_style = create_user_prompt_style()
+    symbol_style = create_system_prompt_style()
+
+    prompt_prefix = create_ptk_prompt_prefix_factory(
+        username_provider,
+        name_style=name_style,
+        symbol_style=symbol_style,
+        append_spaces=1,
+    )
+    bottom_toolbar = create_bottom_toolbar_factory(
+        model_identifier_provider, datetime_provider
+    )
+    placeholder = HTML(f'<style fg="{TEXT_DIM}"><i>Enter a message...</i></style>')
+
+    command_completer = make_slash_command_completer(command_metadata)
+    hashtag_completer = make_hashtag_completer(hashtag_metadata)
+    combined_completer = MultiCompleter(command_completer, hashtag_completer)
+    lexer_cls = make_slash_lexer(command_metadata.keys(), hashtag_metadata.keys())
+    style = make_prompt_style()
+    validator = _CommandInputValidator(
+        known_commands=set(command_metadata.keys()),
+        known_hashtags=set(hashtag_metadata.keys()),
+    )
+
+    return PromptConfiguration(
+        prompt_prefix=prompt_prefix,
+        placeholder=placeholder,
+        bottom_toolbar=bottom_toolbar,
+        completer=combined_completer,
+        lexer_cls=lexer_cls,
+        style=style,
+        validator=validator,
+        validate_while_typing=True,
+    )
+
+
+def build_error_banner(message: str) -> str:
+    """Create a standardized error banner for console rendering.
+
+    Args:
+        message (str): Error message to highlight.
+
+    Returns:
+        str: Rich markup string representing the error banner.
+    """
+
+    return (
+        f"[bold {ERROR_RED}]>>> ERROR:[/bold {ERROR_RED}] "
+        f"[{ERROR_RED}]{message}[/{ERROR_RED}] "
+        f"[bold {ERROR_RED}]<<<[/bold {ERROR_RED}]"
+    )
+
+
+def build_rule_style(
+    text: str = "",
+    *,
+    character: str = "─",
+    style: str | Style | None = None,
+    align: Literal["left", "center", "right"] = "center",
+    newline: bool = False,
+) -> RuleStyle:
+    """Create a rule style descriptor for repeated usage patterns.
+
+    Args:
+        text (str): Label rendered at the center of the rule. Defaults to an
+            empty string.
+        character (str): Character used for drawing the horizontal rule.
+            Defaults to "─".
+        style (str | Style | None): Optional Rich style expression or Style
+            instance for the rule. Defaults to None.
+        align (Literal['left', 'center', 'right']): Alignment of the rule text.
+            Defaults to "center".
+        newline (bool): Whether a newline should follow the rule. Defaults to
+            False.
+
+    Returns:
+        RuleStyle: Descriptor describing the rendering parameters.
+    """
+
+    return RuleStyle(
+        text=text,
+        character=character,
+        style=style,
+        align=align,
+        newline=newline,
+    )
+
+
+def build_exit_rule_style() -> RuleStyle:
+    """Create the rule style used when the CLI exits.
+
+    Returns:
+        RuleStyle: Descriptor for the exit rule styling.
+    """
+
+    return build_rule_style(
+        text=f"[{ERROR_RED}]EXIT[/{ERROR_RED}]",
+        character="━",
+        style=ERROR_RED,
+    )
+
+
+def build_response_start_rule_style(timestamp: datetime) -> RuleStyle:
+    """Create the rule style displayed before rendering a model response.
+
+    Args:
+        timestamp (datetime): Datetime value marking when the response
+            processing began.
+
+    Returns:
+        RuleStyle: Descriptor for the response start divider styling.
+    """
+
+    formatted_timestamp = get_time_str("%H:%M:%S.%f", timestamp)[:-3]
+    return build_rule_style(
+        text=f"[{TEXT_DIM}]{formatted_timestamp}[/{TEXT_DIM}]",
+        character="╌",
+        style=BORDER_COLOR,
+    )
+
+
+def build_response_end_rule_style(duration_seconds: float) -> RuleStyle:
+    """Create the rule style displayed after rendering a model response.
+
+    Args:
+        duration_seconds (float): Duration in seconds for the completed
+            response.
+
+    Returns:
+        RuleStyle: Descriptor for the response end divider styling.
+    """
+
+    readable = seconds_to_strtime(duration_seconds)
+    return build_rule_style(
+        text=f"[{TEXT_DIM}]{readable}[/{TEXT_DIM}]",
+        character="─",
+        style=BORDER_COLOR,
+    )
+
+
+class _ModelOptionValidator(Validator):
+    """Ensure a chosen identifier is present in the available model map."""
+
+    def __init__(self, valid_options: set[str]):
+        self._valid_options = valid_options
+
+    def validate(self, document) -> None:  # noqa: D401 - prompt toolkit signature
+        text = document.text.strip()
+        if text in self._valid_options:
+            return
+        raise ValidationError(
+            message="Choose a valid option identifier.",
+            cursor_position=len(text),
+        )
+
+
+def prompt_model_selection() -> ModelSelectionResult:
+    """Prompt the user to choose an available model identifier.
+
+    Returns:
+        ModelSelectionResult: Result describing the chosen identifier and
+        associated details.
+
+    Raises:
+        ValueError: Raised if parsing the identifier or converting to
+            ModelDetails fails.
+    """
+
+    # Get model selections to show
+    entries: HTMLDict = dict(create_model_options())
+
+    # Create prompt session components
+    completer = FuzzyWordCompleter(list(entries.keys()))
+    validator = _ModelOptionValidator(set(entries.keys()))
+    _prompt_text = _apply_ptk_style1(
+        "Search model: ",
+        fg=TEXT_SECONDARY,
+        decoration="underline",
+        ignore_trailing_spaces=True,
+    )
+
+    # Create prompt session
+    chosen_identifier = prompt(
+        _prompt_text,
+        completer=completer,
+        complete_while_typing=True,
+        complete_in_thread=True,
+        validator=validator,
+        style=make_model_search_style(),
+    ).strip()
+
+    # Get HTML markup of object and convert
+    html_markup = entries[chosen_identifier]
+    styled_identifier = html_obj_to_rich_format(html_markup)
+
+    # Try to parse identifier
+    try:
+        details = KnownModels.parse(chosen_identifier)
+
+    # Something went wrong
+    except Exception as error:
+        raise _loggy.CreationError(
+            object_type=ModelDetails,
+            reason=f"Identifier {chosen_identifier!r} could not be parsed",
+            caused_by=error,
+        )
+
+    # Return result object of selected model
+    return ModelSelectionResult(
+        identifier=chosen_identifier,
+        styled_identifier=styled_identifier,
+        details=details,
+    )
+
+
 def _centre_line_to_terminal(line: str, width: int) -> str:
+    """Centre a single line within the given terminal width.
+
+    Args:
+        line (str): Line content to centre.
+        width (int): Available terminal width in characters.
+
+    Returns:
+        str: Centred line padded with spaces.
+    """
+
     line_length = len(line)
     padding = (width - line_length) // 2
-    print(f"{padding=}")
     return " " * padding + line
 
 
 def _centre_text_to_terminal(text: str) -> str:
+    """Centre multi-line text relative to the current terminal width.
+
+    Args:
+        text (str): Multi-line text that should be centred.
+
+    Returns:
+        str: Centred text joined with newline characters.
+    """
+
     centred_lines = []
     width = get_terminal_width()
     for line in text.splitlines():
@@ -68,12 +745,12 @@ def _create_gradient(start_hex: str, end_hex: str, steps: int) -> list[str]:
     """Create a gradient between two colors.
 
     Args:
-        start_hex: Starting color in hex format (e.g., "#8b5cf6")
-        end_hex: Ending color in hex format (e.g., "#a78bfa")
-        steps: Number of steps in the gradient
+        start_hex (str): Starting color in hex format (for example "#8b5cf6").
+        end_hex (str): Ending color in hex format (for example "#a78bfa").
+        steps (int): Number of steps within the gradient range.
 
     Returns:
-        List of hex color strings representing the gradient
+        list[str]: Hex color strings representing the gradient.
     """
     start = Color(start_hex)
     colors = list(start.range_to(Color(end_hex), steps))
@@ -81,7 +758,15 @@ def _create_gradient(start_hex: str, end_hex: str, steps: int) -> list[str]:
 
 
 def _make_star_sampler(weights: dict[str, int]) -> Callable[[random.Random], str]:
-    """Return a weighted sampler over width-1 star glyphs."""
+    """Return a weighted sampler over width-1 star glyphs.
+
+    Args:
+        weights (dict[str, int]): Mapping from glyph symbol to relative weight.
+
+    Returns:
+        Callable[[random.Random], str]: Callable that produces weighted glyphs
+        using the provided random generator.
+    """
     weight_items: list[tuple[str, int]] = [
         (symbol, weight) for symbol, weight in weights.items() if weight > 0
     ]
@@ -109,7 +794,15 @@ _pick_star = _make_star_sampler({".": 5, "·": 1, "˙": 5, "•": 1})
 
 
 def _poisson_sample(lam: float, random_generator: random.Random) -> int:
-    """Sample from Poisson(lam) with Knuth for small λ, normal approx for large λ."""
+    """Sample from Poisson(lam) with Knuth for small λ, normal approx for large λ.
+
+    Args:
+        lam (float): Rate parameter for the Poisson distribution.
+        random_generator (random.Random): Random generator used for sampling.
+
+    Returns:
+        int: Sampled event count.
+    """
     if lam <= 0:
         return 0
     if lam < 30:
@@ -134,7 +827,24 @@ def _generate_starfield_2d_clustered(
     random_generator: random.Random,
     pick_star: Callable[[random.Random], str] = _pick_star,
 ) -> list[list[str]]:
-    """Generate a clustered 2D starfield as a grid of glyphs."""
+    """Generate a clustered 2D starfield as a grid of glyphs.
+
+    Args:
+        rows (int): Number of rows in the generated grid.
+        columns (int): Number of columns in the generated grid.
+        base_density (float): Uniform background probability per cell.
+        cluster_rate_per_1000 (float): Expected clusters per thousand cells.
+        cluster_mean_size (float): Mean number of stars per cluster.
+        cluster_row_std_cells (float): Vertical spread of each cluster in cells.
+        cluster_col_std_cells (float): Horizontal spread of each cluster in
+            cells.
+        random_generator (random.Random): Random generator used for sampling.
+        pick_star (Callable[[random.Random], str]): Glyph sampler used when a
+            star should be rendered. Defaults to _pick_star.
+
+    Returns:
+        list[list[str]]: Matrix of glyphs representing the starfield.
+    """
     # Background layer
     grid: list[list[str]] = [
         [
@@ -177,6 +887,15 @@ def _generate_starfield_2d_clustered(
 
 
 def _squarify_text(text: str) -> str:
+    """Pad each line of text to the width of the longest line.
+
+    Args:
+        text (str): Multi-line text to square.
+
+    Returns:
+        str: Text with each line centred to the maximum width.
+    """
+
     lines = text.splitlines()
     max_length = max(len(line) for line in lines) if lines else 0
     squarified_lines = [line.center(max_length) for line in lines]
@@ -187,7 +906,16 @@ def _overlay_banner_on_starfield(
     banner: str,
     star_grid: list[list[str]],
 ) -> str:
-    """Overlay the banner into the center of star_grid. Only replaces cells where banner has non-space."""
+    """Overlay a banner into the centre of the star grid.
+
+    Args:
+        banner (str): Multi-line banner text.
+        star_grid (list[list[str]]): Existing star grid that should receive the
+            banner overlay.
+
+    Returns:
+        str: Rendered banner blended with the star grid.
+    """
     square_banner = _squarify_text(banner)
     banner_lines = square_banner.splitlines()
     if not banner_lines:
@@ -235,7 +963,30 @@ def _render_banner_with_starfield(
     cluster_col_std_cells: float = 2.0,
     pick_star: Callable[[random.Random], str] = _pick_star,
 ) -> str:
-    """High-level API: build a 2D clustered starfield and overlay banner centered within it."""
+    """Build a 2D clustered starfield and overlay the banner centred within it.
+
+    Args:
+        banner (str): Banner text to render.
+        width (int | None): Optional explicit width for the starfield grid.
+            Defaults to the detected terminal width when None.
+        seed (int | None): Optional seed used to initialise the random
+            generator. Defaults to None.
+        base_density (float): Background probability for star placement.
+            Defaults to 0.15.
+        cluster_rate_per_1000 (float): Expected clusters per thousand cells.
+            Defaults to 4.0.
+        cluster_mean_size (float): Mean number of stars per cluster. Defaults to
+            5.0.
+        cluster_row_std_cells (float): Vertical spread for cluster generation in
+            cells. Defaults to 1.0.
+        cluster_col_std_cells (float): Horizontal spread for cluster generation
+            in cells. Defaults to 2.0.
+        pick_star (Callable[[random.Random], str]): Glyph sampler used for star
+            placement. Defaults to _pick_star.
+
+    Returns:
+        str: Rendered banner embedded within the generated starfield.
+    """
     terminal_width: int = shutil.get_terminal_size().columns if width is None else width
     banner_lines: list[str] = banner.splitlines()
     rows = len(banner_lines) if banner_lines else 0
@@ -293,18 +1044,66 @@ CURSOR_COLOR = "#c4b5fd"  # light purple tint
 SELECTION_BG = "#312e81"  # purple selection
 
 
+def make_rich_theme() -> Theme:
+    """Create a Rich Theme object matching the prompt_toolkit color palette.
+
+    Returns:
+        Theme: Rich theme configured with Astro color palette.
+    """
+    return Theme(
+        {
+            # Brand colors
+            "primary": PRIMARY_COLOR,
+            "primary.light": PRIMARY_LIGHT,
+            "primary.dark": PRIMARY_DARK,
+            "primary.dim": PRIMARY_DIM,
+            "secondary": SECONDARY_COLOR,
+            "secondary.light": SECONDARY_LIGHT,
+            "secondary.dark": SECONDARY_DARK,
+            "secondary.dim": SECONDARY_DIM,
+            # Text colors
+            "text.primary": TEXT_PRIMARY,
+            "text.secondary": TEXT_SECONDARY,
+            "text.dim": TEXT_DIM,
+            # Background colors
+            "bg.primary": f"on {BG_PRIMARY}",
+            "bg.secondary": f"on {BG_SECONDARY}",
+            "border": BORDER_COLOR,
+            # Semantic colors
+            "success": SUCCESS_GREEN,
+            "info": INFO_BLUE,
+            "warning": WARNING_AMBER,
+            "error": ERROR_RED,
+            "accent.cyan": ACCENT_CYAN,
+            "accent.gold": ACCENT_GOLD,
+            # Markdown-specific overrides to match prompt_toolkit theme
+            "markdown.h1": f"bold {SECONDARY_COLOR}",
+            "markdown.h2": f"bold {PRIMARY_COLOR}",
+            "markdown.h3": f"bold {PRIMARY_LIGHT}",
+            "markdown.h4": f"bold {TEXT_PRIMARY}",
+            "markdown.h5": f"bold {TEXT_SECONDARY}",
+            "markdown.h6": f"bold {TEXT_DIM}",
+            "markdown.code": f"{ACCENT_CYAN}",
+            "markdown.code_block": f"{TEXT_PRIMARY} on {BG_SECONDARY}",
+            "markdown.link": f"underline {SECONDARY_LIGHT}",
+            "markdown.link_url": f"{SECONDARY_DIM}",
+            "markdown.text": TEXT_PRIMARY,
+            "markdown.em": f"italic {TEXT_PRIMARY}",
+            "markdown.strong": f"bold {TEXT_PRIMARY}",
+            "markdown.item.bullet": SECONDARY_COLOR,
+            "markdown.item.number": SECONDARY_COLOR,
+        }
+    )
+
+
 def get_welcome_header() -> Group:
     """Generate a styled welcome header with ASCII art and metadata.
 
-    Creates a gradient-colored ASCII art header for the ASTRO CLI application,
-    followed by version information, organization details, and helpful command hints.
-
-    Args:
-        version: Application version string (e.g., "1.0.0")
-        organization: Organization or author name
+    Creates a gradient-colored ASCII art header for the Astro CLI application
+    followed by metadata describing the version and helpful command hints.
 
     Returns:
-        Formatted welcome header string with Rich markup for colored output
+        Group: Rich render group containing the header and metadata rows.
     """
     # Get information
     version_value = get_astro_version().split("+")[0]
@@ -320,16 +1119,16 @@ def get_welcome_header() -> Group:
 
     # ASCII art header
     welcome_header = _render_banner_with_starfield(
-        """
+        textwrap.dedent("""
 
- █████╗ ███████╗████████╗██████╗  ██████╗      ██████╗██╗     ██╗
-██╔══██╗██╔════╝╚══██╔══╝██╔══██╗██╔═══██╗    ██╔════╝██║     ██║
-███████║███████╗   ██║   ██████╔╝██║   ██║    ██║     ██║     ██║
-██╔══██║╚════██║   ██║   ██╔══██╗██║   ██║    ██║     ██║     ██║
-██║  ██║███████║   ██║   ██║  ██║╚██████╔╝    ╚██████╗███████╗██║
-╚═╝  ╚═╝╚══════╝   ╚═╝   ╚═╝  ╚═╝ ╚═════╝      ╚═════╝╚══════╝╚═╝
+         █████╗ ███████╗████████╗██████╗  ██████╗      ██████╗██╗     ██╗
+        ██╔══██╗██╔════╝╚══██╔══╝██╔══██╗██╔═══██╗    ██╔════╝██║     ██║
+        ███████║███████╗   ██║   ██████╔╝██║   ██║    ██║     ██║     ██║
+        ██╔══██║╚════██║   ██║   ██╔══██╗██║   ██║    ██║     ██║     ██║
+        ██║  ██║███████║   ██║   ██║  ██║╚██████╔╝    ╚██████╗███████╗██║
+        ╚═╝  ╚═╝╚══════╝   ╚═╝   ╚═╝  ╚═╝ ╚═════╝      ╚═════╝╚══════╝╚═╝
 
-"""
+        """)
     )
 
     # Apply gradient to ASCII art
@@ -409,11 +1208,11 @@ _PTK_UI = {
 
 
 def make_prompt_style() -> BaseStyle:
-    """Return a merged Style for PromptSession(style=...).
+    """Create the merged style used by the primary prompt session.
 
-
-    - Pygments tokens from your lexer
-    - PTK UI classes for menus/toolbars
+    Returns:
+        BaseStyle: Prompt_toolkit style containing pygments tokens and UI
+        selectors.
     """
     pyg_style = style_from_pygments_dict(_PYGMENTS_BASE)
     ptk_ui = Style.from_dict(_PTK_UI)
@@ -430,11 +1229,14 @@ def make_slash_lexer(
     as errors.
 
     Args:
-        command_aliases (Iterable[str]): Iterable of command strings (e.g. /help, /init).
-        hashtag_aliases (Iterable[str]): Iterable of hashtag context options (e.g. #base.py, #MyClass)
+        command_aliases (Iterable[str]): Iterable of command strings for
+            example "/help" or "/init".
+        hashtag_aliases (Iterable[str]): Iterable of hashtag context options for
+            example "#history".
 
     Returns:
-        type[RegexLexer]: A RegexLexer subclass that recognizes known commands and hashtags.
+        type[RegexLexer]: Lexer subclass that recognises known commands and
+        hashtags.
     """
     command_set = set(command_aliases)
     hashtag_set = set(hashtag_aliases)
@@ -502,24 +1304,26 @@ class StyledCompleter(Completer):
         """Initialize the styled completer.
 
         Args:
-            base_completer: The underlying completer to wrap.
-            style: Style string to apply to completion text (e.g., "bold fg:#6c97d0").
-            meta_style: Optional style string for metadata text.
+            base_completer (Completer): Underlying completer to wrap.
+            style (str): Style string applied to completion text. Defaults to
+                an empty string.
+            selected_style (str): Style applied to the currently selected
+                completion entry. Defaults to an empty string.
         """
         self._base_completer = base_completer
         self._style = style
         self._selected_style = selected_style
-        self._app = get_app()
 
     def get_completions(self, document, complete_event):
-        """Get completions with applied styling.
+        """Yield completions with applied styling.
 
         Args:
-            document: The current document.
-            complete_event: The completion event.
+            document (Document): Prompt_toolkit document describing the input
+                buffer.
+            complete_event (CompleteEvent): Completion trigger event.
 
         Yields:
-            Completion objects with styled display text.
+            Completion: Completion objects with styled display text.
         """
 
         for completion in self._base_completer.get_completions(
@@ -535,15 +1339,15 @@ class StyledCompleter(Completer):
 
 
 def make_slash_command_completer(
-    commands: dict[str, str],
+    commands: StrDict,
 ) -> StyledCompleter:
     """Create a styled completer for slash commands.
 
     Args:
-        commands: Dictionary mapping command strings to their descriptions.
+        commands (StrDict): Mapping of command strings to descriptions.
 
     Returns:
-        A StyledCompleter with slash command styling.
+        StyledCompleter: Styled completer configured for slash commands.
     """
     base_completer = FuzzyWordCompleter(list(commands.keys()), meta_dict=commands)
     return StyledCompleter(
@@ -554,15 +1358,15 @@ def make_slash_command_completer(
 
 
 def make_hashtag_completer(
-    hashtags: dict[str, str],
+    hashtags: StrDict,
 ) -> StyledCompleter:
     """Create a styled completer for hashtags.
 
     Args:
-        hashtags: Dictionary mapping hashtag strings to their descriptions.
+        hashtags (StrDict): Mapping of hashtag strings to descriptions.
 
     Returns:
-        A StyledCompleter with hashtag styling.
+        StyledCompleter: Styled completer configured for hashtags.
     """
     base_completer = FuzzyWordCompleter(list(hashtags.keys()), meta_dict=hashtags)
     return StyledCompleter(
@@ -583,8 +1387,8 @@ class MultiCompleter(Completer):
         """Initialize the multi-completer.
 
         Args:
-            slash_completer: Completer for slash commands.
-            hashtag_completer: Completer for hashtags.
+            slash_completer (Completer): Completer handling slash commands.
+            hashtag_completer (Completer): Completer handling hashtags.
         """
         self._slash_completer = slash_completer
         self._hashtag_completer = hashtag_completer
@@ -593,11 +1397,12 @@ class MultiCompleter(Completer):
         """Get completions based on the current input context.
 
         Args:
-            document: The current document.
-            complete_event: The completion event.
+            document (Document): Prompt_toolkit document providing the text
+                context.
+            complete_event (CompleteEvent): Completion trigger event.
 
         Yields:
-            Completion objects from the appropriate completer.
+            Completion: Completion objects from the appropriate completer.
         """
         text = document.text_before_cursor
 
@@ -631,6 +1436,58 @@ class MultiCompleter(Completer):
                 )
 
 
+class _CommandInputValidator(Validator):
+    """Validate slash commands and hashtags against known registries."""
+
+    def __init__(self, known_commands: set[str], known_hashtags: set[str]):
+        """Initialise the validator with known command and hashtag registries.
+
+        Args:
+            known_commands (set[str]): Registered command tokens.
+            known_hashtags (set[str]): Registered hashtag tokens.
+        """
+
+        self._commands = known_commands
+        self._hashtags = known_hashtags
+
+    def validate(self, document) -> None:  # noqa: D401 - required signature
+        """Validate the current input document.
+
+        Args:
+            document (Document): Prompt_toolkit document under validation.
+
+        Raises:
+            ValidationError: Raised when an unknown command, hashtag, or
+                unexpected argument is encountered.
+        """
+
+        text = document.text
+        stripped = text.strip()
+        if not stripped:
+            return
+
+        words = stripped.split()
+        if stripped.lstrip().startswith("/"):
+            command_token = words[0]
+            if command_token not in self._commands:
+                raise ValidationError(
+                    message=f"Unknown command {command_token!r}. Use /help for options.",
+                    cursor_position=len(command_token),
+                )
+            if len(words) > 1:
+                raise ValidationError(
+                    message=f"Command {command_token!r} does not accept arguments.",
+                    cursor_position=len(document.text),
+                )
+
+        for token in words:
+            if token.startswith("#") and token not in self._hashtags:
+                raise ValidationError(
+                    message=f"Unknown hashtag {token!r}.",
+                    cursor_position=text.find(token) + len(token),
+                )
+
+
 _PROVIDER_COLOR_MAP = {
     "openai": ("#fcfdfc", "#0fa37e"),
     "anthropic": ("#fdfdf6", "#d87657"),
@@ -639,6 +1496,19 @@ _PROVIDER_COLOR_MAP = {
 
 
 def _format_model(model: ModelDetails) -> HTML:
+    """Format model details into an HTML snippet for completion menus.
+
+    Args:
+        model (ModelDetails): Model metadata to format.
+
+    Returns:
+        HTML: Styled HTML snippet containing provider, model, and variant.
+
+    Raises:
+        ValueError: Raised when the provider is not registered in the provider
+            color map.
+    """
+
     if model.provider not in _PROVIDER_COLOR_MAP:
         raise _loggy.ValueError(f"Model provider {model.provider!r} not in color map")
     primary, secondary = _PROVIDER_COLOR_MAP[model.provider]
@@ -656,22 +1526,25 @@ def _format_model(model: ModelDetails) -> HTML:
 
 
 def create_model_options() -> list[tuple[str, HTML]]:
+    """Create formatted model options for the model picker.
+
+    Returns:
+        list[tuple[str, HTML]]: Sequence mapping model identifiers to formatted
+        HTML representations.
+    """
+
     models = KnownModels._identifier_to_details.values()
     return [(model.to_identifier(), _format_model(model)) for model in models]
 
 
 def html_obj_to_rich_format(html_obj: HTML) -> str:
-    """
-    Convert a prompt_toolkit.HTML object into a Rich markup string.
+    """Convert a prompt_toolkit HTML object into Rich markup.
 
-    Rules:
-    - Keep only explicit fg:/bg: colors.
-    - Ignore class:... and other style tokens.
-    - Merge adjacent spans that resolve to the same (fg, bg).
-    - Map:
-        fg only        -> "[fg]text[/fg]"
-        fg and bg      -> "[fg on bg]text[/fg on bg]"
-        neither        -> "text"
+    Args:
+        html_obj (HTML): Prompt_toolkit HTML object to convert.
+
+    Returns:
+        str: Equivalent Rich markup string.
     """
 
     def parse_style(style_str: str) -> tuple[str | None, str | None]:
@@ -753,4 +1626,42 @@ _PTK_MODEL_SEARCH_UI = {
 
 
 def make_model_search_style() -> BaseStyle:
+    """Create the style used for the interactive model search prompt.
+
+    Returns:
+        BaseStyle: Prompt_toolkit style applied during model selection.
+    """
+
     return Style.from_dict(_PTK_MODEL_SEARCH_UI)
+
+
+def escape_rich_markup(text: str) -> str:
+    """Escape special characters in Rich markup.
+
+    Args:
+        text (str): Input text containing potential Rich markup.
+
+    Returns:
+        str: Text with special characters escaped for Rich.
+    """
+    return text.replace("[", r"\[").replace("]", r"\]")
+
+
+if __name__ == "__main__":
+    text = "Hello, World!"
+    prompt(_apply_ptk_style1(text, fg=PRIMARY_COLOR))
+    prompt(_apply_ptk_style1(text, bg=PRIMARY_LIGHT))
+    prompt(_apply_ptk_style1(text, bold=True))
+    prompt(_apply_ptk_style1(text, italic=True))
+    prompt(_apply_ptk_style1(text, decoration="underline"))
+    prompt(_apply_ptk_style1(text, decoration="strikethrough"))
+    prompt(
+        _apply_ptk_style1(
+            text,
+            fg=PRIMARY_COLOR,
+            bg=BG_SECONDARY,
+            bold=True,
+            italic=True,
+            decoration="underline",
+        )
+    )

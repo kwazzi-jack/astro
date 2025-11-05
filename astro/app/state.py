@@ -1,17 +1,23 @@
-# --- External Imports ---
+# --- Internal Imports ---
 import json
-from typing import overload
+from typing import Any, Literal, overload
 
-from pydantic import BaseModel, Field
+# --- External Imports ---
+from pydantic import BaseModel, Field, field_validator
 
 # --- Local Imports ---
 from astro.llms.base import KnownModels, ModelDetails
-from astro.loggings.base import get_loggy
+from astro.logger import get_loggy
 from astro.paths import APPSTATE_PATH
 from astro.utilities.system import get_users_name
 
 # --- Globals ---
 _loggy = get_loggy(__file__)
+
+
+# --- Helper Function ---
+def _check_if_initialised() -> Literal["valid", "corrupted", "missing"]:
+    return "valid"
 
 
 # --- Application State ---
@@ -20,8 +26,13 @@ class _AppState(BaseModel):
     current_model: ModelDetails = Field(
         default=KnownModels.parse("ollama:llama3.1:latest")
     )
-    exec_count: int = Field(default=0)
     prompt_enabled: bool = Field(default=False)
+    initialised: bool = Field(default=False)
+
+    @field_validator("initialised")
+    @classmethod
+    def validate_initialised(cls, value: Any) -> bool:
+        return value
 
     def save(self):
         if APPSTATE_PATH is None:
@@ -70,9 +81,6 @@ class _AppState(BaseModel):
             self.current_model = KnownModels.parse(identifier)
         else:
             self.current_model = identifier
-
-    def increment_count(self, n: int = 1) -> None:
-        self.exec_count += n
 
     def switch_username_to(self, value: str) -> None:
         if len(value) == 0:

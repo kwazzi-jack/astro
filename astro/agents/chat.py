@@ -1,101 +1,90 @@
 # --- Internal Imports ---
-from typing import Any
+from collections.abc import AsyncIterator
+
+# --- External Imports ---
+from pydantic_ai import AgentRunResultEvent, AgentStreamEvent, ModelSettings, RunContext
 
 # --- Local Imports ---
-from astro.agents.base import Agent, AgentConfig
+from astro.agents.base import create_agent
 from astro.llms.contexts import ChatContext
-from astro.llms.prompts import PromptTemplate
-from astro.loggings.base import get_loggy
-from astro.typings import ModelName, ModelProvider
+from astro.llms.prompts import create_assistant_message, get_prompt_template
+from astro.logger import get_loggy
+from astro.typings import AsyncChatFunction, MessageList
+from astro.utilities.timing import get_datetime_str
 
 # --- Globals ---
 loggy = get_loggy(__file__)
 
 
-# --- Factory Functions for Specific Agent Types ---
-
-
-def create_chat_agent(
-    identifier: str | ModelName | ModelProvider,
-    provider: str | ModelProvider | None = None,
-    system_prompt_or_tag: str | PromptTemplate | None = None,
-    welcome_prompt_or_tag: str | PromptTemplate | None = None,
-    context_prompt_or_tag: str | PromptTemplate | None = None,
-    context_type: type[ChatContext] | None = None,
-    **overrides: Any,
-) -> Agent:
-    loggy.debug("Creating new agent")
-
-    try:
-        config = AgentConfig.for_chat(
-            identifier,
-            provider,
-            system_prompt_or_tag,
-            welcome_prompt_or_tag,
-            context_prompt_or_tag,
-            context_type,
-            **overrides,
-        )
-    except Exception as error:
-        raise loggy.CreationError(object_type=AgentConfig, caused_by=error)
-
-    loggy.debug(
-        f"Using AgentConfig {config.secret_uid} "
-        f"for {config.llm_config.model_name.value!r} "
-        f"from {config.llm_config.model_provider.value!r}"
-    )
-
-    return Agent(config)
-
-
-def create_primary_chat_agent(
-    identifier: str | ModelName | ModelProvider,
-    provider: str | ModelProvider | None = None,
-) -> Agent:
-    """Create a primary chat agent with default settings.
-
-    Args:
-        identifier (str | ModelName | ModelProvider): Model name or provider identifier
-        provider (str | ModelProvider | None): Optional model provider (inferred if not provided)
-
-    Returns:
-        Agent: Configured primary chat agent
-
-    Examples:
-        # Simple usage
-        agent = create_primary_chat_agent("gpt-4o")
-
-        # With provider specification
-        agent = create_primary_chat_agent("gpt-4o", provider="openai")
-    """
-    return create_chat_agent(
-        identifier=identifier,
-        provider=provider,
-        system_prompt_or_tag=PromptTemplate.CHAT_SYSTEM,
-        welcome_prompt_or_tag=PromptTemplate.CHAT_WELCOME,
-        context_prompt_or_tag=PromptTemplate.CHAT_CONTEXT,
+# --- Chat Agent ---
+def create_astro_chat(
+    identifier: str = "ollama:llama3.1:latest",
+) -> tuple[
+    AsyncChatFunction,
+    MessageList,
+]:
+    # Create base agent
+    astro_agent = create_agent(
+        identifier,
+        model_settings=ModelSettings(temperature=0.7),
         context_type=ChatContext,
+        agent_name="astro-chat",
     )
 
+    # Get agent context and templates
+    context = ChatContext()
+    system_template = get_prompt_template("#chat-system")
+    welcome_template = get_prompt_template("#chat-welcome")
 
-# --- Legacy Compatibility Class ---
+    # Main message list
+    messages: MessageList = [create_assistant_message(welcome_template(context))]
 
+    # System instructions
+    @astro_agent.instructions
+    async def get_system_instructions(ctx: RunContext[ChatContext]) -> str:
+        return system_template(ctx.deps)
 
-if __name__ == "__main__":
-    from astro.utilities.display import astro_md_print, md_print, user_md_input
+    # System tool for datetime
+    @astro_agent.tool(docstring_format="google")
+    async def get_system_datetime(ctx: RunContext[ChatContext]) -> str:
+        """Get the current system datetime formatted as a string.
 
-    # Create a simple chat agent using the class method
-    astro = create_primary_chat_agent("gpt-4o-mini")
-    astro_md_print("# Astro Agent Demo (Chat)")
-    astro_md_print(f"**Model:** {astro.config.model_name}")
-    astro_md_print(f"**UID:** {astro.uid}")
-    astro_md_print("## Conversation Start")
-    for msg in astro.messages:
-        astro_md_print(msg.content)
-    while True:
-        user_input = user_md_input()
-        if user_input.lower() in {"exit", "quit", "q"}:
-            md_print("Exiting chat. Goodbye!")
-            break
-        response = astro.act(user_input)
-        astro_md_print(response)
+        Returns a formatted datetime string from the chat context's datetime attribute.
+
+        Args:
+            ctx (RunContext[ChatContext]): Runtime context containing chat state and dependencies.
+
+        Returns:
+            str: Formatted datetime string representing the current system time.
+        """
+        return get_datetime_str(dt=ctx.deps.datetime)
+
+    async def chat_stream(
+        prompt: str,
+    ) -> AsyncIterator[AgentStreamEvent | AgentRunResultEvent[str]]:
+        """Stream responses from the astro agent for a given prompt.
+
+        Args:
+            prompt (str): User prompt to send to the agent.
+
+        Yields:
+            (AgentStreamEvent | AgentRunResultEvent[str]): Streaming events from the agent.
+
+        Raises:
+            ExpectedTypeError: If prompt is not a string.
+        """
+        if not isinstance(prompt, str):
+            raise loggy.ExpectedTypeError(
+                expected=str, got=type(prompt), with_value=prompt
+            )
+
+        loggy.debug("Starting chat stream", prompt=prompt)
+        nonlocal messages
+        async for event in astro_agent.run_stream_events(
+            prompt, message_history=messages, deps=context
+        ):
+            if event.event_kind == "agent_run_result":
+                messages.extend(event.result.new_messages())
+            yield event
+
+    return chat_stream, messages

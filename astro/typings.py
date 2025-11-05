@@ -1,33 +1,70 @@
 # --- Internal Imports ---
-import base64
-import json
-from collections.abc import Sequence
+from collections.abc import AsyncIterator, Callable, Sequence
 from datetime import datetime
 from enum import StrEnum
 from pathlib import Path
-from typing import Any, TypeAlias, TypeAliasType, TypeVar, get_args
+from typing import Any, Literal, TypeAlias, TypeAliasType, get_args
 
 # --- External Imports ---
-import blake3
-from pydantic import BaseModel, ConfigDict
+from prompt_toolkit import HTML
+from pydantic import BaseModel
+from pydantic_ai import AgentRunResultEvent, AgentStreamEvent, ModelMessage
 
 # --- Local Imports ---
+# ...
 
 # --- Generic Types & Type Aliases ---
 StrPath: TypeAlias = str | Path
+PTKDecoration: TypeAlias = Literal["underline", "strikethrough", "none"]
+
+# Dictionaries / Structs
 StrDict: TypeAlias = dict[str, str]
 PathDict: TypeAlias = dict[str, Path]
 NamedDict: TypeAlias = dict[str, Any]
+HTMLDict: TypeAlias = dict[str, HTML]
 SchemaLike: TypeAlias = type[BaseModel] | BaseModel | dict[str, Any]
-RecordableType = TypeVar("RecordableType", bound="RecordableModel")
+
+# Lists / Tuples
+MessageList: TypeAlias = list[ModelMessage]
+
+# Functions
+AnyFactory: TypeAlias = Callable[[], Any]
+AsyncChatFunction: TypeAlias = Callable[
+    [str], AsyncIterator[AgentStreamEvent | AgentRunResultEvent[str]]
+]
+DateTimeFactory: TypeAlias = Callable[[], datetime]
+FloatFactory: TypeAlias = Callable[[], float]
+HTMLFactory: TypeAlias = Callable[[], HTML]
+InlineFn: TypeAlias = Callable[[], None]
+StringFactory: TypeAlias = Callable[[], str]
+
+# --- General & Type Helper Functions ---
 
 
 def literal_to_list(literal_type: TypeAliasType) -> list[Any]:
+    """Convert a Literal type alias into its list of contained values.
+
+    Args:
+        literal_type (TypeAliasType): Type alias created from a typing.Literal
+            declaration.
+
+    Returns:
+        list[Any]: Values extracted from the literal alias.
+    """
+
     return [value for value in get_args(literal_type)]
 
 
 def secretify(value: Any) -> str:
-    """Obscures the middle part of a string, showing only the ends."""
+    """Obscure the middle portion of a value converted to string.
+
+    Args:
+        value (Any): Value whose string representation should be masked.
+
+    Returns:
+        str: Obfuscated string that preserves only the leading and trailing
+        characters.
+    """
     value_str = str(value)
     length = len(value_str)
 
@@ -51,6 +88,20 @@ def secretify(value: Any) -> str:
 
 
 def str_dict_to_path_dict(contents: StrDict) -> PathDict:
+    """Convert a dictionary of string paths into resolved Path objects.
+
+    Args:
+        contents (StrDict): Mapping of identifiers to filesystem paths stored
+            as strings.
+
+    Returns:
+        PathDict: Mapping of identifiers to resolved Path instances.
+
+    Raises:
+        ValueError: Raised when any provided path cannot be converted into a
+            valid Path instance.
+    """
+
     try:
         return {key: Path(value).resolve() for key, value in contents.items()}
     except Exception as error:
@@ -60,6 +111,18 @@ def str_dict_to_path_dict(contents: StrDict) -> PathDict:
 
 
 def path_dict_to_str_dict(contents: PathDict) -> StrDict:
+    """Convert a dictionary of Path objects into string representations.
+
+    Args:
+        contents (PathDict): Mapping of identifiers to Path instances.
+
+    Returns:
+        StrDict: Mapping of identifiers to string paths.
+
+    Raises:
+        ValueError: Raised when a path cannot be converted to a string.
+    """
+
     try:
         return {key: str(value) for key, value in contents.items()}
     except Exception as error:
@@ -69,6 +132,15 @@ def path_dict_to_str_dict(contents: PathDict) -> StrDict:
 
 
 def type_name(obj: Any) -> str:
+    """Return the class name for an object or type.
+
+    Args:
+        obj (Any): Object or type instance to inspect.
+
+    Returns:
+        str: Deduced class name.
+    """
+
     if isinstance(obj, type):
         return obj.__name__
     else:
@@ -76,6 +148,17 @@ def type_name(obj: Any) -> str:
 
 
 def options_to_str(values: Sequence[str], with_repr: bool = False) -> str:
+    """Convert a sequence of strings into a readable options list.
+
+    Args:
+        values (Sequence[str]): Sequence of option strings to format.
+        with_repr (bool): Optional flag indicating whether to wrap entries in
+            repr formatting. Defaults to False.
+
+    Returns:
+        str: Formatted options string suitable for messaging.
+    """
+
     if len(values) == 0:
         return "''" if with_repr else ""
     elif len(values) == 1:
@@ -91,15 +174,22 @@ def options_to_str(values: Sequence[str], with_repr: bool = False) -> str:
             return ", ".join(values[:-1]) + " or " + values[-1]
 
 
-def options_to_repr_str(values: Sequence[str]) -> str:
-    return options_to_str(list(map(repr, values)))
-
-
 def type_options(objects: Sequence[Any]) -> list[str]:
+    """Return a list of class names for the provided sequence.
+
+    Args:
+        objects (Sequence[Any]): Objects whose class names should be returned.
+
+    Returns:
+        list[str]: Class names associated with the provided objects.
+    """
+
     return list(map(type_name, objects))
 
 
 class PathKind(StrEnum):
+    """Enumeration describing supported filesystem path classifications."""
+
     FILE = "file"
     DIRECTORY = "directory"
     SYMLINK = "symlink"
@@ -112,6 +202,15 @@ class PathKind(StrEnum):
 
 
 def get_path_type(path: Path) -> PathKind:
+    """Determine the filesystem entry type for a path.
+
+    Args:
+        path (Path): Filesystem path to inspect.
+
+    Returns:
+        PathKind: Enumerated path classification.
+    """
+
     if not path.exists():
         return PathKind.MISSING
     if path.is_file():
@@ -132,127 +231,36 @@ def get_path_type(path: Path) -> PathKind:
 
 
 def _datetime_json_encoder(dt: datetime) -> str:
+    """Serialize a datetime instance into an ISO 8601 string.
+
+    Args:
+        dt (datetime): Datetime value to serialize.
+
+    Returns:
+        str: ISO formatted datetime string.
+    """
+
     return dt.isoformat()
 
 
 def _path_json_encoder(path: Path) -> str:
+    """Serialize a Path instance into its string representation.
+
+    Args:
+        path (Path): Path instance to serialize.
+
+    Returns:
+        str: String form of the provided path.
+    """
+
     return str(path)
 
 
-class RecordableModel(BaseModel, frozen=True):
-    """Base model for recordable objects with hashing and dictionary utilities.
-
-    This class provides methods for generating hashes and converting to dictionaries,
-    suitable for database storage or serialization.
-
-    Attributes:
-        None (inherits from BaseModel; placeholder for any custom attributes).
-    """
-
-    model_config = ConfigDict(
-        frozen=True,
-        # These ensure consistent serialization:
-        use_enum_values=False,  # Don't convert enums to their values
-        json_encoders={
-            datetime: _datetime_json_encoder,  # Consistent datetime format
-            Path: _path_json_encoder,  # Convert Path to string
-        },
-    )
-
-    def _compute_stable_hash(self) -> bytes:
-        """Compute a stable blake3 hash that's consistent across systems.
-
-        Returns:
-            bytes: The raw blake3 hash bytes (32 bytes).
-        """
-
-        # Get JSON-serializable representation
-        model_dict = self.model_dump(
-            mode="json",
-            exclude_none=False,
-            exclude_defaults=False,
-        )
-
-        # Create deterministic JSON string
-        # Brian - If something is wrong with hashing, its probably here
-        json_str = json.dumps(
-            model_dict,
-            sort_keys=True,  # IMPORTANT: for consistent key order
-            separators=(",", ";"),  # No whitespace
-            ensure_ascii=True,  # Avoid encoding variations
-            default=str,  # Fallback conversion
-        )
-
-        # Generate black3 hash
-        return blake3.blake3(json_str.encode("utf-8")).digest()
-
-    # OVERRIDE: pydantic.BaseModel.__hash__
-    def __hash__(self) -> int:
-        """Return the hash value of the model based on its stable hash.
-
-        Returns:
-            int: The hash value computed from the stable hash.
-        """
-        return int.from_bytes(self._compute_stable_hash(), byteorder="big")
-
-    # OVERRIDE: pydantic.BaseModel.__eq__
-    def __eq__(self, other: Any) -> bool:
-        """Override of BaseModel.__eq__ to compare models based on their stable hash.
-
-        Two models are considered equal if they are of the same type and have the same hash value,
-        ensuring consistent equality based on content rather than identity.
-
-        Args:
-            other (Any): The object to compare with this model instance.
-
-        Returns:
-            bool: True if the objects are equal, False otherwise.
-        """
-
-        # Not the same type
-        if not isinstance(other, type(self)):
-            return False
-
-        # Compare hashes
-        return hash(self) == hash(other)
-
-    @property
-    def uid(self) -> str:
-        """Return unique identifier based on the model's content hash."""
-        return self.to_hex()
-
-    def to_hex(self) -> str:
-        return hex(hash(self))[2:]
-
-    def to_base64(self) -> str:
-        """Generate a base64-encoded representation of the model's stable hash.
-
-        Returns:
-            str: Base64-encoded string of the model's blake3 hash (44 characters).
-        """
-        return base64.b64encode(self._compute_stable_hash()).decode("ascii")
-
-    def secret_uid(self) -> str:
-        return secretify(self.uid)
-
-
-def count_pydantic_fields(model_class: type[BaseModel]) -> int:
-    return len(model_class.model_fields)
-
-
-def get_class_import_path(cls: type) -> str:
-    return f"{cls.__module__}.{cls.__name__}"
-
-
-def get_class_from_import_path(import_path: str) -> type:
-    components = import_path.split(".")
-    module_path = ".".join(components[:-1])
-    class_name = components[-1]
-
-    module = __import__(module_path, fromlist=[class_name])
-    cls = getattr(module, class_name)
-    return cls
-
-
-if __name__ == "__main__":
-    ...
+def _object_log_formatter(obj: Any) -> str:
+    if isinstance(obj, str):
+        return repr(obj)
+    if isinstance(obj, datetime):
+        return repr(_datetime_json_encoder(obj))
+    if isinstance(obj, Path):
+        return repr(_path_json_encoder(obj))
+    return repr(obj)

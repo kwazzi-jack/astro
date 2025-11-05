@@ -3,7 +3,7 @@ from enum import StrEnum
 
 from pydantic import BaseModel, ConfigDict, Field
 
-from astro.loggings.base import LogLevel, get_loggy
+from astro.logger import LogLevel, get_loggy
 
 # Load logger
 _logger = get_loggy(__file__)

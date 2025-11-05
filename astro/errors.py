@@ -4,11 +4,9 @@ from collections.abc import Collection, Mapping, Sequence
 from pathlib import Path
 from typing import Any, TypeVar
 
-# --- External Imports ---
 # --- Local Imports ---
 from astro.typings import (
     NamedDict,
-    RecordableModel,
     StrPath,
     get_path_type,
     options_to_str,
@@ -17,6 +15,7 @@ from astro.typings import (
     type_options,
 )
 
+# --- Globals ---
 AstroErrorType = TypeVar("AstroErrorType", bound="AstroError")
 PythonErrorType = TypeVar("PythonErrorType", bound=Exception)
 
@@ -336,7 +335,7 @@ class NoEntryError(AstroError, KeyError):
         self,
         *,
         key_value: Any,
-        sources: Sequence[str | RecordableModel] | str | RecordableModel | None = None,
+        sources: Sequence[str] | str | None = None,
         extra: NamedDict | None = None,
         caused_by: Exception | None = None,
     ):
@@ -344,7 +343,7 @@ class NoEntryError(AstroError, KeyError):
         extra = (extra or {}) | {"key_value": key_value}
 
         # Normalize sources to a sequence for consistent processing
-        sources_seq: Sequence[str | RecordableModel] = []
+        sources_seq: Sequence[str] = []
         if sources is not None:
             if isinstance(sources, Sequence) and not isinstance(sources, str):
                 sources_seq = sources
@@ -354,19 +353,8 @@ class NoEntryError(AstroError, KeyError):
 
             # Prepare formatted source descriptions for message
             formatted_sources = []
-            object_hashes = []
             for source in sources_seq:
-                if isinstance(source, RecordableModel):
-                    object_type = type_name(type(source))
-                    object_hash = hash(source)
-                    formatted_sources.append(f"{object_type} ({object_hash})")
-                    object_hashes.append(object_hash)
-                else:
-                    formatted_sources.append(repr(source))
-            if object_hashes:
-                extra["object_hash"] = (
-                    object_hashes if len(object_hashes) > 1 else object_hashes[0]
-                )
+                formatted_sources.append(repr(source))
         else:
             formatted_sources = []
 
@@ -386,7 +374,7 @@ class LoadError(AstroError):
         self,
         *,
         path_or_uid: StrPath | int | None = None,
-        obj_or_key: RecordableModel | Any | None = None,
+        obj_or_key: Any | None = None,
         load_from: str | None = None,
         extra: NamedDict | None = None,
         caused_by: Exception | None = None,
@@ -403,15 +391,7 @@ class LoadError(AstroError):
 
         # Object to save
         extra["object_or_key_type"] = type(obj_or_key)
-        message += f" {type_name(obj_or_key)}"
-
-        # Object has hash
-        if isinstance(obj_or_key, RecordableModel):
-            object_hash = hash(obj_or_key)
-            extra["object_hash"] = object_hash
-            message += f" ({secretify(object_hash)})"
-
-        message += " to"
+        message += f" {type_name(obj_or_key)} to"
 
         # Loading source
         if isinstance(load_from, str) and len(load_from.strip()) > 0:
@@ -442,7 +422,7 @@ class SaveError(AstroError):
         self,
         *,
         path_or_uid: StrPath | None = None,
-        obj_to_save: RecordableModel | Any | None = None,
+        obj_to_save: Any | None = None,
         save_to: str | None = None,
         extra: NamedDict | None = None,
         caused_by: Exception | None = None,
@@ -459,15 +439,7 @@ class SaveError(AstroError):
 
         # Object to save
         extra["object_type"] = type(obj_to_save)
-        message += f" {type_name(obj_to_save)}"
-
-        # Object has hash
-        if isinstance(obj_to_save, RecordableModel):
-            object_hash = hash(obj_to_save)
-            extra["object_hash"] = object_hash
-            message += f" ({secretify(object_hash)})"
-
-        message += " to"
+        message += f" {type_name(obj_to_save)} to"
 
         # Saving source
         if isinstance(save_to, str) and len(save_to.strip()) > 0:
@@ -486,72 +458,6 @@ class SaveError(AstroError):
         elif path_or_uid is not None:
             extra["uid"] = path_or_uid
             message += f" using uid {secretify(path_or_uid)}"
-
-        # Construct parent
-        super().__init__(message=message, extra=extra, caused_by=caused_by)
-
-
-class ModelFileStoreError(AstroError):
-    """Raised when an error occurs with a store operation."""
-
-    from astro.paths import ModelFileStore
-
-    def __init__(
-        self,
-        *,
-        operation: str,
-        reason: str | None = None,
-        stores: ModelFileStore | Sequence[ModelFileStore] | None = None,
-        model_or_uid: RecordableModel | type[RecordableModel] | str | None = None,
-        extra: NamedDict | None = None,
-        caused_by: Exception | None = None,
-    ):
-        # Error details
-        extra = extra or {}
-        extra["operation"] = operation
-
-        # Error message
-        message = f"Error occurred during store operation `{operation}`"
-
-        if model_or_uid is not None and isinstance(model_or_uid, RecordableModel):
-            extra["model_type"] = type(model_or_uid)
-            extra["model_hash"] = hash(model_or_uid)
-            message += (
-                f" of model {type_name(model_or_uid)} ({secretify(hash(model_or_uid))})"
-            )
-        if (
-            model_or_uid is not None
-            and isinstance(model_or_uid, type)
-            and issubclass(model_or_uid, RecordableModel)
-        ):
-            extra["model_type"] = model_or_uid
-            message += f" of model type {model_or_uid.__name__}"
-        elif model_or_uid is not None:
-            extra["model_uid"] = model_or_uid
-            message += f" for model uid {secretify(model_or_uid)}"
-
-        if stores is not None and isinstance(stores, Sequence):
-            for store in stores:
-                name = store.name.lower() if store.name else "unnamed"
-                extra[f"store_{name}_name"] = store.name
-                extra[f"store_{name}_root_dir"] = store.root_dir
-                extra[f"store_{name}_model_type"] = store.model_type
-                extra[f"store_{name}_index_path"] = store.index_file
-            message += f" in stores {options_to_str([store.name for store in stores])}"
-        elif stores is not None:
-            extra["store_name"] = stores.name
-            extra["store_root_dir"] = stores.root_dir
-            extra["store_model_type"] = stores.model_type
-            extra["store_index_path"] = stores.index_file
-            message += (
-                f" in store {stores.name} for model type {stores.model_type.__name__}"
-            )
-
-        if reason is not None and len(reason.strip()) > 0:
-            extra["reason"] = reason
-            message += f": {reason}"
-        else:
-            extra["reason"] = "unspecified"
 
         # Construct parent
         super().__init__(message=message, extra=extra, caused_by=caused_by)
@@ -585,23 +491,3 @@ class CreationError(AstroError):
 
         # Construct parent
         super().__init__(message=message, extra=extra, caused_by=caused_by)
-
-
-if __name__ == "__main__":
-    from astro.typings import RecordableModel
-
-    class TestModel(RecordableModel, frozen=True):
-        id: int
-        name: str
-
-    obj = TestModel(id=1, name="Test")
-
-    try:
-        1 / 0  # type: ignore
-    except Exception as error:
-        raise SaveError(
-            path_or_uid="/home/brian/PhD/astro/.gitignore",
-            save_to="file",
-            obj_to_save=obj,
-            caused_by=error,
-        )

@@ -1,24 +1,13 @@
 # astro/logger.py
+"""Logging helpers and Loggy error utilities for Astro."""
 
 # --- Internal Imports ---
-import datetime
-import json
 import logging
-import os
-import platform
-import socket
-import traceback
 from collections.abc import Collection, Mapping, Sequence
 from enum import IntEnum
 from logging.handlers import TimedRotatingFileHandler
 from pathlib import Path
 from typing import Any
-
-# --- External Imports ---
-from rich.console import Console
-from rich.logging import RichHandler
-from rich.text import Text
-from rich.theme import Theme
 
 # --- Local Imports ---
 from astro.errors import (
@@ -32,7 +21,6 @@ from astro.errors import (
     KeyStrError,
     KeyTypeError,
     LoadError,
-    ModelFileStoreError,
     NoEntryError,
     PythonErrorType,
     SaveError,
@@ -41,8 +29,8 @@ from astro.errors import (
 )
 from astro.typings import (
     NamedDict,
-    RecordableModel,
     StrPath,
+    _object_log_formatter,
     type_name,
 )
 
@@ -74,133 +62,82 @@ class LogLevel(IntEnum):
                 raise ValueError(f"Unknown log level: {value}")
 
 
-# --- Configuration ---
-_BASE_LOG_LEVEL = logging.INFO
-
-
-def _get_log_file():
+def _get_log_file() -> Path | str:
     """Get the log file path, importing _LOG_DIR lazily to avoid circular imports."""
     from astro.paths import LOG_DIR
 
     if LOG_DIR is None:
-        return "astro.jsonl"
-    return LOG_DIR / "astro.jsonl"
+        return "astro.log"
+    return LOG_DIR / "astro.log"
+
+
+class _ExtraFormatter(logging.Formatter):
+    """Custom formatter that appends extra fields to log messages.
+
+    Automatically formats extra keyword arguments as key=value pairs
+    separated by pipes at the end of the log message.
+    """
+
+    # Standard LogRecord attributes that should not be treated as extras
+    _RESERVED_ATTRS = {
+        "name",
+        "msg",
+        "args",
+        "created",
+        "filename",
+        "funcName",
+        "levelname",
+        "levelno",
+        "lineno",
+        "module",
+        "msecs",
+        "message",
+        "pathname",
+        "process",
+        "processName",
+        "relativeCreated",
+        "thread",
+        "threadName",
+        "exc_info",
+        "exc_text",
+        "stack_info",
+        "asctime",
+        "taskName",
+    }
+
+    def format(self, record: logging.LogRecord) -> str:
+        """Format the log record, appending any extra fields.
+
+        Args:
+            record: The log record to format.
+
+        Returns:
+            str: The formatted log message with extras appended.
+        """
+        # Get the base formatted message
+        base_message = super().format(record)
+
+        # Extract extra fields (any attribute not in the reserved set)
+        extras = {
+            key: value
+            for key, value in record.__dict__.items()
+            if key not in self._RESERVED_ATTRS
+        }
+
+        # If there are extras, append them to the message
+        if extras:
+            extra_parts = [
+                f"{key}={_object_log_formatter(value)}" for key, value in extras.items()
+            ]
+            return f"{base_message} | {', '.join(extra_parts)}"
+
+        return base_message
 
 
 # Internal flag to ensure setup runs only once
 _setup_done = False
 
-# Define custom theme for Rich
-_CUSTOM_THEME = Theme(
-    {
-        "logging.level.debug": "bold green",
-        "logging.level.info": "bold cyan",
-        "logging.level.warning": "bold yellow",
-        "logging.level.error": "bold red",
-        "logging.level.critical": "bold white on red",
-        "info": "bold cyan",
-        "warning": "bold yellow",
-        "error": "bold red",
-        "critical": "bold white on red",
-        "debug": "dim blue",
-        "logging.time": "bold blue",
-    }
-)
-
-# Local Timezone
-_LOCAL_TZ = datetime.datetime.now().astimezone().tzinfo
-
-
-class JsonFormatter(logging.Formatter):
-    """Custom formatter to output logs in JSONL format."""
-
-    def __init__(self):
-        super().__init__()
-        self.standard_attributes = {
-            "args",
-            "asctime",
-            "created",
-            "exc_info",
-            "exc_text",
-            "filename",
-            "funcName",
-            "levelname",
-            "levelno",
-            "lineno",
-            "module",
-            "msecs",
-            "message",
-            "msg",
-            "name",
-            "pathname",
-            "process",
-            "processName",
-            "relativeCreated",
-            "stack_info",
-            "thread",
-            "threadName",
-        }
-
-        self.system_context = {
-            "hostname": socket.gethostname(),
-            "platform": platform.platform(),
-            "python_version": platform.python_version(),
-            "pid": os.getpid(),
-            "application": "astro",
-        }
-
-    def format(self, record):
-        """Formats a log record into a JSON string with extended context."""
-        log_data = {
-            "timestamp": self._format_timestamp(record.created),
-            "name": record.name,
-            "level": record.levelname,
-            "levelno": record.levelno,
-            "filename": record.filename,
-            "lineno": record.lineno,
-            "message": record.getMessage(),
-            "module": record.module,
-            "function": record.funcName,
-            "pathname": record.pathname,
-            "process": record.process,
-            "thread": record.thread,
-            "system": self.system_context,
-        }
-
-        if record.exc_info:
-            log_data["exception"] = self._format_exception(record.exc_info)
-        if record.stack_info:
-            log_data["stack_info"] = self._format_stack(record.stack_info)
-
-        extra = self._get_extra_fields(record)
-        if extra:
-            log_data["extra"] = extra
-
-        return json.dumps(log_data, ensure_ascii=False)
-
-    def _format_exception(self, exc_info):
-        """Formats exception information into a string."""
-        return "".join(traceback.format_exception(*exc_info))
-
-    def _format_stack(self, stack_info):
-        """Formats stack information (already a string)."""
-        return stack_info
-
-    def _get_extra_fields(self, record):
-        """Extracts extra fields from the log record."""
-        return {
-            key: value
-            for key, value in record.__dict__.items()
-            if key not in self.standard_attributes
-        }
-
-    def _format_timestamp(self, created):
-        """Formats the timestamp in ISO 8601 UTC format."""
-        return datetime.datetime.fromtimestamp(created, tz=_LOCAL_TZ).isoformat()
-
-
-def dt_formatter(dt: datetime.datetime) -> Text:
-    return Text(dt.isoformat(sep=" ", timespec="milliseconds"))
+logging.getLogger("astro").addHandler(logging.NullHandler())
 
 
 def _get_module_logger(filepath: StrPath) -> logging.Logger:
@@ -231,9 +168,6 @@ class Loggy:
         _module_path (StrPath): The file path of the module using this logger instance.
         _logger (logging.Logger): The underlying logger instance.
     """
-
-    # Lazy references
-    from astro.paths import ModelFileStore
 
     def __init__(self, module_path: StrPath) -> None:
         """Initializes the Loggy instance.
@@ -1097,7 +1031,7 @@ class Loggy:
         self,
         *,
         key_value: Any,
-        sources: Sequence[str | RecordableModel] | str | RecordableModel | None = None,
+        sources: Sequence[str] | str | None = None,
         caused_by: AstroError | Exception | None = None,
         warning: str | None = None,
         skip_error_log: bool = False,
@@ -1107,7 +1041,7 @@ class Loggy:
 
         Args:
             key_value (Any): The key that was not found.
-            sources (Sequence[str | RecordableModel] | str | RecordableModel | None, optional): The source(s) that were searched. Defaults to None.
+            sources (Sequence[str] | str | None, optional): The source(s) that were searched. Defaults to None.
             caused_by (AstroError | Exception | None, optional): The error to wrap. Defaults to None.
             warning (str | None, optional): An optional warning message to log before the error. Defaults to None.
             skip_error_log (bool, optional): If True, logging is skipped. Defaults to False.
@@ -1130,7 +1064,7 @@ class Loggy:
         self,
         *,
         path_or_uid: StrPath | int | None = None,
-        obj_or_key: RecordableModel | Any | None = None,
+        obj_or_key: Any | None = None,
         load_from: str | None = None,
         caused_by: AstroError | Exception | None = None,
         warning: str | None = None,
@@ -1141,7 +1075,7 @@ class Loggy:
 
         Args:
             path_or_uid (StrPath | int | None, optional): The path or UID of the object that failed to load. Defaults to None.
-            obj_or_key (RecordableModel | Any | None, optional): The object or key that failed to load. Defaults to None.
+            obj_or_key (Any | None, optional): The object or key that failed to load. Defaults to None.
             load_from (str | None, optional): The source from which the object was being loaded. Defaults to None.
             caused_by (AstroError | Exception | None, optional): The error to wrap. Defaults to None.
             warning (str | None, optional): An optional warning message to log before the error. Defaults to None.
@@ -1170,7 +1104,7 @@ class Loggy:
         self,
         *,
         path_or_uid: StrPath | None = None,
-        obj_to_save: RecordableModel | Any | None = None,
+        obj_to_save: Any | None = None,
         save_to: str | None = None,
         caused_by: AstroError | Exception | None = None,
         warning: str | None = None,
@@ -1181,7 +1115,7 @@ class Loggy:
 
         Args:
             path_or_uid (StrPath | None, optional): The path or UID of the object that failed to save. Defaults to None.
-            obj_to_save (RecordableModel | Any | None, optional): The object that failed to save. Defaults to None.
+            obj_to_save (Any | None, optional): The object that failed to save. Defaults to None.
             save_to (str | None, optional): The destination where the object was being saved. Defaults to None.
             caused_by (AstroError | Exception | None, optional): The error to wrap. Defaults to None.
             warning (str | None, optional): An optional warning message to log before the error. Defaults to None.
@@ -1199,49 +1133,6 @@ class Loggy:
                 path_or_uid=path_or_uid,
                 obj_to_save=obj_to_save,
                 save_to=save_to,
-                extra=extra,
-            ),
-            caused_by=caused_by,
-            warning=warning,
-            skip_error_log=skip_error_log,
-        )
-
-    def ModelFileStoreError(
-        self,
-        *,
-        operation: str,
-        reason: str | None = None,
-        stores: ModelFileStore | Sequence[ModelFileStore] | None = None,
-        model_or_uid: RecordableModel | type[RecordableModel] | str | None = None,
-        caused_by: AstroError | Exception | None = None,
-        warning: str | None = None,
-        skip_error_log: bool = False,
-        **extra: Any,
-    ) -> ModelFileStoreError:
-        """Creates, logs, and returns a ModelFileStoreError.
-
-        Args:
-            operation (str): The operation that failed.
-            reason (str | None, optional): The reason for the failure. Defaults to None.
-            store (ModelFileStore | Sequence[ModelFileStore] | None, optional): The name of the store. Defaults to None.
-            model_or_uid (RecordableModel | type[RecordableModel] | str | None, optional): The model involved in the operation. Defaults to None.
-            caused_by (AstroError | Exception | None, optional): The error to wrap. Defaults to None.
-            warning (str | None, optional): An optional warning message to log before the error. Defaults to None.
-            skip_error_log (bool, optional): If True, logging is skipped. Defaults to False.
-            extra (Any, optional): Additional details to include in the log.
-
-        Returns:
-            ModelFileStoreError: The created error instance.
-        """
-        if warning is not None:
-            self.warning(warning)
-
-        return self._log_and_return_astro_error(
-            error=ModelFileStoreError(
-                operation=operation,
-                reason=reason,
-                stores=stores,
-                model_or_uid=model_or_uid,
                 extra=extra,
             ),
             caused_by=caused_by,
@@ -1285,45 +1176,59 @@ class Loggy:
         )
 
 
-def setup_logging():
-    """Configures the base astro logger with handlers."""
+def setup_logging(level: str = "DEBUG", log_file: str | None = None) -> None:
+    """Configure the astro logger with a file handler.
+
+    Args:
+        level (str): Desired logging level for the astro logger. Defaults to "DEBUG".
+        log_file (str | None, optional): Explicit log file path. Defaults to astro.log.
+
+    Raises:
+        ValueError: If the provided logging level is invalid.
+
+    Examples:
+        >>> setup_logging(level="DEBUG")
+    """
+
     global _setup_done
-    if _setup_done:
-        return
 
     base_logger = logging.getLogger("astro")
-    base_logger.setLevel(logging.DEBUG)
 
-    # Rich handler for console
-    console = Console(theme=_CUSTOM_THEME)
-    rich_handler = RichHandler(
-        console=console,
-        level=_BASE_LOG_LEVEL,
-        show_time=True,
-        show_level=True,
-        show_path=True,
-        log_time_format=dt_formatter,
-        omit_repeated_times=False,
-        enable_link_path=True,
-        rich_tracebacks=True,
-        markup=True,
-    )
+    if _setup_done or any(
+        getattr(handler, "_astro_managed", False) for handler in base_logger.handlers
+    ):
+        base_logger.setLevel(LogLevel.from_str(level).value)
+        _setup_done = True
+        return
 
-    # JSONL handler for file
-    file_handler = TimedRotatingFileHandler(
-        filename=_get_log_file(),
+    log_path: str | Path
+    if log_file is not None:
+        log_path = log_file
+    else:
+        log_path = _get_log_file()
+
+    handler = TimedRotatingFileHandler(
+        filename=log_path,
         when="midnight",
         interval=1,
-        backupCount=14,  # Two weeks of logs
+        backupCount=14,
         encoding="utf-8",
         delay=False,
     )
-    file_handler.setFormatter(JsonFormatter())
-    file_handler.setLevel(logging.DEBUG)
+    handler.setFormatter(
+        _ExtraFormatter(
+            fmt="%(asctime)s %(name)s [%(levelname)s] %(message)s",
+            datefmt="%Y-%m-%d %H:%M:%S%z",
+        )
+    )
+    handler.setLevel(logging.DEBUG)
+    handler._astro_managed = True  # type: ignore[attr-defined]
 
-    if not base_logger.handlers:
-        base_logger.addHandler(rich_handler)
-        base_logger.addHandler(file_handler)
+    base_logger.addHandler(handler)
+    base_logger.setLevel(LogLevel.from_str(level).value)
+
+    # Checkpoint log
+    base_logger.debug("Checkpoint -- logging setup complete")
 
     _setup_done = True
 
@@ -1340,31 +1245,6 @@ def get_loggy(filepath: StrPath) -> "Loggy":
     Returns:
         Loggy: A configured Loggy instance.
     """
-    setup_logging()
-    return Loggy(filepath)
-
-
-# Initialize logging when module is imported
-setup_logging()
-
-if __name__ == "__main__":
-    from pathlib import Path
-
-    from astro.paths import LOG_DIR
-
-    print(LOG_DIR)
-    main_logger = get_loggy(__file__)
-    util_logger = get_loggy(Path(__file__).parent / "util.py")
-
-    main_logger.debug("Debug message (not shown)")
-    main_logger.info("Info message")
-    util_logger.warning("Warning message")
-    util_logger.error("Error message")
-
-    try:
-        1 / 0  # type: ignore
-    except ZeroDivisionError:
-        main_logger.exception("Exception occurred")
-
-    main_logger.critical("Get help. We are melting")
-    print(f"\nCheck console output and JSONL logs at '{_get_log_file()}'")
+    loggy = Loggy(filepath)
+    loggy.debug("Module imported and logging initialised")
+    return loggy

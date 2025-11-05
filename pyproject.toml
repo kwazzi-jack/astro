@@ -57,4 +57,4 @@ dev = [
 ]
 
 [project.scripts]
-astro = "astro.app.base:astro"
+astro = "astro._bootstrap:_run_astro_cli"
