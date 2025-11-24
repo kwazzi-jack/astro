@@ -1,34 +1,47 @@
 # --- Internal Imports ---
-from collections.abc import AsyncIterator
 
 # --- External Imports ---
-from pydantic_ai import AgentRunResultEvent, AgentStreamEvent, ModelSettings, RunContext
+from pydantic_ai import (
+    ModelSettings,
+    RunContext,
+)
 
 # --- Local Imports ---
-from astro.agents.base import create_agent
-from astro.llms.contexts import ChatContext
+from astro.agents.base import create_agent, create_agent_stream
+from astro.contexts import ChatContext
 from astro.llms.prompts import create_assistant_message, get_prompt_template
 from astro.logger import get_loggy
-from astro.typings import AsyncChatFunction, MessageList
+from astro.typings.base import MessageList
+from astro.typings.callables import AgentFn, AgentFnSequence, StreamFn
 from astro.utilities.timing import get_datetime_str
 
 # --- Globals ---
-loggy = get_loggy(__file__)
+_loggy = get_loggy(__file__)
 
 
 # --- Chat Agent ---
-def create_astro_chat(
+def create_astro_stream(
     identifier: str = "ollama:llama3.1:latest",
-) -> tuple[
-    AsyncChatFunction,
-    MessageList,
-]:
+    tools: AgentFn[ChatContext] | AgentFnSequence[ChatContext] | None = None,
+) -> tuple[StreamFn, MessageList]:
+    """Create the Astro chat agent and unified streaming adapter.
+
+    Args:
+        identifier (str): Model identifier used to initialise the agent.
+        tools (AgentFn[ChatContext] | AgentFnSequence[ChatContext] | None): Optional tools for the agent.
+
+    Returns:
+        tuple[StreamFn, MessageList]: Stream function and shared
+        message history list.
+    """
     # Create base agent
     astro_agent = create_agent(
         identifier,
-        model_settings=ModelSettings(temperature=0.7),
         context_type=ChatContext,
-        agent_name="astro-chat",
+        tools=tools,
+        output_type=str,
+        model_settings=ModelSettings(temperature=0.7),
+        agent_name="astro",
     )
 
     # Get agent context and templates
@@ -44,47 +57,28 @@ def create_astro_chat(
     async def get_system_instructions(ctx: RunContext[ChatContext]) -> str:
         return system_template(ctx.deps)
 
-    # System tool for datetime
-    @astro_agent.tool(docstring_format="google")
-    async def get_system_datetime(ctx: RunContext[ChatContext]) -> str:
-        """Get the current system datetime formatted as a string.
+    return create_agent_stream(astro_agent, context, messages), messages
 
-        Returns a formatted datetime string from the chat context's datetime attribute.
 
-        Args:
-            ctx (RunContext[ChatContext]): Runtime context containing chat state and dependencies.
+if __name__ == "__main__":
+    from astro.config import setup_api_config
 
-        Returns:
-            str: Formatted datetime string representing the current system time.
-        """
-        return get_datetime_str(dt=ctx.deps.datetime)
+    setup_api_config()
 
-    async def chat_stream(
-        prompt: str,
-    ) -> AsyncIterator[AgentStreamEvent | AgentRunResultEvent[str]]:
-        """Stream responses from the astro agent for a given prompt.
+    def generate_name() -> str:
+        import random
 
-        Args:
-            prompt (str): User prompt to send to the agent.
+        names = ["Alice", "Bob", "Charlie", "Diana", "Eve", "Frank"]
+        return random.choice(names)
 
-        Yields:
-            (AgentStreamEvent | AgentRunResultEvent[str]): Streaming events from the agent.
+    astro_chat, messages = create_astro_stream(
+        "ollama:gpt-oss:latest", tools=generate_name
+    )
 
-        Raises:
-            ExpectedTypeError: If prompt is not a string.
-        """
-        if not isinstance(prompt, str):
-            raise loggy.ExpectedTypeError(
-                expected=str, got=type(prompt), with_value=prompt
-            )
+    import asyncio
 
-        loggy.debug("Starting chat stream", prompt=prompt)
-        nonlocal messages
-        async for event in astro_agent.run_stream_events(
-            prompt, message_history=messages, deps=context
-        ):
-            if event.event_kind == "agent_run_result":
-                messages.extend(event.result.new_messages())
-            yield event
+    async def test():
+        async for output in astro_chat("Can you give me the a random name?"):
+            print(f"{output=}")
 
-    return chat_stream, messages
+    asyncio.run(test())

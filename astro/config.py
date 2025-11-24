@@ -5,7 +5,7 @@ from typing import Any
 
 # --- External Imports ---
 from dotenv import dotenv_values
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field, SecretStr, computed_field
 
 # --- Local Imports ---
 from astro.logger import get_loggy
@@ -34,40 +34,45 @@ class MainConfig(BaseModel):
 
 
 class APIConfig(BaseModel):
-    # OpenAI: gpt-4o, gpt-4o-mini, gpt-5-codex, etc.
-    OPENAI_API_KEY: str | None = None
+    # Set to frozen
+    model_config = ConfigDict(frozen=True)
 
-    # Anthropic: claude-4-sonnet, claude-4.5-sonnet, claude-4.5-haiku, etc.
-    ANTHROPIC_API_KEY: str | None = None
+    def _get_env_value(self, env_key: str) -> SecretStr | None:
+        if env_key not in os.environ:
+            return None
+        return SecretStr(os.environ[env_key])
 
-    # Google: gemini-2.5-flash, gemini-2.0-flash, etc.
-    GEMINI_API_KEY: str | None = None
+    @computed_field
+    @property
+    def openai_api_key(self) -> SecretStr | None:
+        return self._get_env_value("OPENAI_API_KEY")
 
-    # DeepSeek AI: deepseek-v3, deepseek-r1, etc.
-    DEEPSEEK_API_KEY: str | None = None
+    @computed_field
+    @property
+    def anthropic_api_key(self) -> SecretStr | None:
+        return self._get_env_value("ANTHROPIC_API_KEY")
 
-    # Ollama (local)
-    OLLAMA_API_KEY: str | None = None
-    OLLAMA_BASE_URL: str = "http://localhost:11434/v1"
+    @computed_field
+    @property
+    def google_api_key(self) -> SecretStr | None:
+        return self._get_env_value("GEMINI_API_KEY")
 
-    @classmethod
-    def from_env_dict(cls, env_dict: dict[str, Any]) -> "APIConfig":
-        """Create an APIConfig instance from a dictionary of environment variables.
+    @computed_field
+    @property
+    def deepseek_api_key(self) -> SecretStr | None:
+        return self._get_env_value("DEEPSEEK_API_KEY")
 
-        Filters the provided environment dictionary to include only the relevant API
-        environment variable names and constructs an APIConfig instance with those values.
+    @computed_field
+    @property
+    def ollama_base_url(self) -> SecretStr | None:
+        return self._get_env_value("OLLAMA_BASE_URL") or SecretStr(
+            "http://localhost:11434"
+        )
 
-        Args:
-            env_dict: Dictionary containing environment variable names and values.
-
-        Returns:
-            APIConfig: An instance of APIConfig with API keys set from the filtered dictionary.
-        """
-        model_dict = {}
-        for key in _API_ENV_NAMES:
-            if key in env_dict:
-                model_dict[key] = env_dict[key]
-        return cls(**model_dict)
+    @computed_field
+    @property
+    def ollama_api_key(self) -> SecretStr | None:
+        return self._get_env_value("OLLAMA_API_KEY")
 
     def openai_set(self) -> bool:
         """Is OpenAI API available to be used?
@@ -78,7 +83,7 @@ class APIConfig(BaseModel):
         Returns:
             bool: True if the API key is set, otherwise False.
         """
-        return self.OPENAI_API_KEY is not None
+        return self.openai_api_key is not None
 
     def anthropic_set(self) -> bool:
         """Is Anthropic API available to be used?
@@ -89,7 +94,7 @@ class APIConfig(BaseModel):
         Returns:
             bool: True if the API key is set, otherwise False.
         """
-        return self.ANTHROPIC_API_KEY is not None
+        return self.anthropic_api_key is not None
 
     def google_set(self) -> bool:
         """Is Google (Gemini) API available to be used?
@@ -100,9 +105,9 @@ class APIConfig(BaseModel):
         Returns:
             bool: True if the API key is set, otherwise False.
         """
-        return self.GEMINI_API_KEY is not None
+        return self.google_api_key is not None
 
-    def deepsek_set(self) -> bool:
+    def deepseek_set(self) -> bool:
         """Is DeepSeek API available to be used?
 
         Checks if the API key for DeepSeek has been set
@@ -111,7 +116,7 @@ class APIConfig(BaseModel):
         Returns:
             bool: True if the API key is set, otherwise False.
         """
-        return self.DEEPSEEK_API_KEY is not None
+        return self.deepseek_api_key is not None
 
     def ollama_set(self) -> bool:
         """Is Ollama API available to be used?
@@ -122,7 +127,45 @@ class APIConfig(BaseModel):
         Returns:
             bool: True if the API key is set, otherwise False.
         """
-        return self.OLLAMA_BASE_URL is not None
+        return self.ollama_base_url is not None
+
+    def is_set_map(self) -> NamedDict:
+        return {
+            "openai": self.ollama_set(),
+            "anthropic": self.anthropic_set(),
+            "google": self.google_set(),
+            "deepseek": self.deepseek_set(),
+            "ollama": self.ollama_set(),
+        }
+
+    def is_set(self, provider_or_identifier: str) -> bool:
+        if provider_or_identifier.count(":") > 0:
+            provider = provider_or_identifier.split(":")[0]
+        else:
+            provider = provider_or_identifier
+        provider_to_api_set = self.is_set_map()
+        if provider not in provider_to_api_set:
+            raise _loggy.ValueError(f"Provider {provider!r} not supported")
+        return provider_to_api_set[provider]
+
+    def get_api(self, provider_or_identifier: str) -> str | None:
+        if provider_or_identifier.count(":") > 0:
+            provider = provider_or_identifier.split(":")[0]
+        else:
+            provider = provider_or_identifier
+        provider_to_api = {
+            "openai": self.openai_api_key,
+            "anthropic": self.anthropic_api_key,
+            "google": self.google_api_key,
+            "deepseek": self.deepseek_api_key,
+            "ollama": self.ollama_api_key,
+        }
+        if provider not in provider_to_api:
+            raise _loggy.ValueError(f"Provider {provider!r} not supported")
+        result = provider_to_api.get(provider)
+        if result is not None:
+            return result.get_secret_value()
+        return None
 
 
 # --- Environment Variable Functions ---
@@ -290,14 +333,36 @@ def setup_api_config() -> APIConfig:
     else:
         _loggy.debug("No applicable shell environment variables to set")
 
+    # Set environment with this dictionary
+    for key, value in env_dict.items():
+        if value is not None:
+            os.environ[key] = value
+
     # Set global api config instance and return
-    _API_CONFIG = APIConfig.from_env_dict(env_dict)
+    _API_CONFIG = APIConfig()
     _loggy.debug(
         "API config created",
         openai_set=_API_CONFIG.openai_set(),
         anthropic_set=_API_CONFIG.anthropic_set(),
         google_set=_API_CONFIG.google_set(),
-        deepseek_set=_API_CONFIG.deepsek_set(),
+        deepseek_set=_API_CONFIG.deepseek_set(),
         ollama_set=_API_CONFIG.ollama_set(),
     )
+
     return _API_CONFIG
+
+
+def get_api_config() -> APIConfig:
+    global _API_CONFIG
+    if _API_CONFIG is None:
+        _loggy.warning("API Configuration was not set up - Running setup now")
+        _API_CONFIG = setup_api_config()
+    return _API_CONFIG
+
+
+# --- Exports ---
+__all__ = [
+    "APIConfig",
+    "get_api_config",
+    "setup_api_config",
+]

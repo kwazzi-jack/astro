@@ -1,6 +1,7 @@
 """CLI entrypoint for the Astro interactive shell."""
 
 # --- Internal Imports ---
+import asyncio
 import inspect
 from dataclasses import dataclass
 from typing import Any
@@ -11,13 +12,13 @@ from prompt_toolkit import PromptSession
 from prompt_toolkit.lexers import PygmentsLexer
 from rich.console import Console, RenderableType
 from rich.console import Group as RichGroup
-from rich.live import Live
 from rich.markdown import Markdown
 from rich.table import Table
 from rich.text import Text
 
 # --- Local Imports ---
-from astro.agents.chat import create_astro_chat
+from astro.agents.chat import create_astro_stream
+from astro.app.chat_stream import ChatStreamRenderer
 from astro.app.state import _AppState
 from astro.logger import get_loggy
 from astro.paths import APPSTATE_PATH
@@ -34,19 +35,17 @@ from astro.theme import (
     build_error_banner,
     build_exit_rule_style,
     build_response_end_rule_style,
-    build_response_start_rule_style,
     create_astro_prompt_style,
     create_prompt_configuration,
-    create_ptk_prompt_prefix_factory,
     create_rich_prompt_prefix,
     create_system_prompt_style,
-    escape_rich_markup,
     get_welcome_header,
     html_obj_to_rich_format,
     make_rich_theme,
     prompt_model_selection,
 )
-from astro.typings import AnyFactory, AsyncChatFunction, MessageList
+from astro.typings import MessageList
+from astro.typings.callables import AnyFn, StreamFn
 from astro.utilities.timing import create_timer, get_datetime_now, seconds_to_strtime
 
 # --- GLOBALS ---
@@ -107,11 +106,11 @@ class CommandSpec:
     """
 
     name: str
-    handler: AnyFactory
+    handler: AnyFn
     summary: str
 
     @classmethod
-    def from_handler(cls, name: str, handler: AnyFactory) -> "CommandSpec":
+    def from_handler(cls, name: str, handler: AnyFn) -> "CommandSpec":
         """Create a command specification from a handler.
 
         Args:
@@ -164,12 +163,37 @@ class AstroCLI:
             hashtag_metadata=self._hashtags,
         )
         self._session = self._create_prompt_session(self._prompt_config)
-        self._chat_stream: AsyncChatFunction | None = None
+        self._astro_prompt_style: AstroStyle = create_astro_prompt_style()
+        self._system_prompt_style: AstroStyle = create_system_prompt_style()
+
+        def build_prompt_prefix() -> str:
+            return create_rich_prompt_prefix(
+                name="astro",
+                symbol=">",
+                name_style=self._astro_prompt_style,
+                symbol_style=self._system_prompt_style,
+                delimiter=" ",
+                trailing_spaces=1,
+            )
+
+        def build_think_prefix() -> str:
+            return create_rich_prompt_prefix(
+                name="Thinking",
+                symbol="",
+                name_style=self._astro_prompt_style,
+                delimiter="",
+                trailing_spaces=1,
+            )
+
+        self._chat_renderer = ChatStreamRenderer(
+            console=self._console,
+            prefix_factory=build_prompt_prefix,
+            think_prefix_factory=build_think_prefix,
+        )
+        self._chat_stream: StreamFn | None = None
         self._chat_history: MessageList | None = None
         self._initialise_chat_agent()
         self._previous_response_duration: float | None = None
-        self._astro_prompt_style: AstroStyle = create_astro_prompt_style()
-        self._system_prompt_style: AstroStyle = create_system_prompt_style()
 
     def _load_appstate(self, overwrite: bool = False) -> _AppState:
         """Load the persisted application state or create a new one.
@@ -284,7 +308,7 @@ class AstroCLI:
 
         identifier = self._state.current_model.to_identifier()
         try:
-            stream_fn, message_history = create_astro_chat(identifier)
+            stream_fn, message_history = create_astro_stream(identifier)
         except Exception as error:  # pragma: no cover - defensive guard
             _loggy.exception(
                 "Failed to initialise chat agent",
@@ -434,6 +458,7 @@ class AstroCLI:
             f"{prefix}[{TEXT_SECONDARY}]{prompt}[/{TEXT_SECONDARY}]"
         )
         self._print(user_text, as_block=False)
+        self._print_newline()
         return prompt
 
     async def _stream_chat_response(self, prompt: str) -> None:
@@ -451,58 +476,15 @@ class AstroCLI:
                 "Chat agent is not initialised. Try selecting a different model."
             )
             return
-
-        response_buffer = create_rich_prompt_prefix(
-            name="astro",
-            name_style=self._astro_prompt_style,
-            symbol_style=self._system_prompt_style,
-            append_spaces=1,
-        )
-        has_streamed_content = False
-
-        def _render_response() -> Markdown:
-            return Markdown(response_buffer)
-
-        with Live(
-            _render_response(),
-            console=self._console,
-            refresh_per_second=12,
-            get_renderable=_render_response,
-        ) as live:
-            try:
-                async for event in self._chat_stream(prompt):
-                    if event.event_kind == "part_start":
-                        part = getattr(event, "part", None)
-                        if getattr(part, "part_kind", None) == "text":
-                            content = getattr(part, "content", "")
-                            if content:
-                                response_buffer += content
-                                has_streamed_content = True
-                                live.update(_render_response())
-                    elif event.event_kind == "part_delta":
-                        delta = getattr(event, "delta", None)
-                        if getattr(delta, "part_delta_kind", None) == "text":
-                            delta_content = getattr(delta, "content_delta", "")
-                            if delta_content:
-                                response_buffer += delta_content
-                                has_streamed_content = True
-                                live.update(_render_response())
-                    elif event.event_kind == "agent_run_result":
-                        output = event.result.output
-                        if isinstance(output, str) and not has_streamed_content:
-                            response_buffer += output
-                            has_streamed_content = True
-                            live.update(_render_response())
-            except Exception as error:  # pragma: no cover - defensive guard
-                live.stop()
-                _loggy.exception(
-                    "Chat streaming failed",
-                    prompt=prompt,
-                )
-                self._print_error(f"Error while streaming response: {error}")
-                return
-
-        self._print_newline()
+        try:
+            await self._chat_renderer.render(prompt, self._chat_stream)
+        except Exception as error:  # pragma: no cover - defensive guard
+            _loggy.exception(
+                "Chat streaming failed",
+                prompt=prompt,
+            )
+            self._print_error(f"Error while streaming response: {error}")
+            return
 
     def _build_help_text(self) -> RenderableType:
         """Build dynamic help text from registered command handlers.
@@ -616,20 +598,51 @@ class AstroCLI:
         _loggy.debug("Checkpoint -- stopping AstroCLI")
         raise SystemExit(0)
 
-    def _cmd_model(self) -> None:
+    async def _cmd_model(self) -> None:
         """Run the interactive model selection prompt."""
 
         try:
-            selection = prompt_model_selection()
+            selection = await asyncio.to_thread(prompt_model_selection)
         except KeyboardInterrupt:
             return
-        self._state.switch_model_to(selection.details)
-        self._initialise_chat_agent()
+        previous_model = self._state.current_model
+        try:
+            self._state.switch_model_to(selection.details)
+            self._initialise_chat_agent()
+        except Exception as error:
+            _loggy.exception(
+                "Chat agent initialisation failed for selected model",
+                requested_identifier=selection.details.to_identifier(),
+                error_type=type(error).__name__,
+            )
+            self._print_error(
+                "Failed to initialise chat agent for "
+                f"{selection.details.to_identifier()}. Details: {error}. "
+                f"Restoring {previous_model.to_identifier()} instead."
+            )
+            self._state.switch_model_to(previous_model)
+            try:
+                self._initialise_chat_agent()
+            except Exception as restore_error:  # pragma: no cover - defensive guard
+                _loggy.exception(
+                    "Failed to restore previous chat agent after model switch",
+                    previous_identifier=previous_model.to_identifier(),
+                    error_type=type(restore_error).__name__,
+                )
+                self._print_error(
+                    "Previous chat agent could not be restored. Try choosing a different model or restart Astro."
+                )
+            return
+
         self._print(
             f"[{TEXT_SECONDARY}]Selected model:[/{TEXT_SECONDARY}] {selection.styled_identifier}"
         )
 
-    async def run(self) -> None:
+    def run(self) -> None:
+        """Start the interactive CLI session."""
+        asyncio.run(self._arun())
+
+    async def _arun(self) -> None:
         """Start the interactive CLI session."""
 
         self._cmd_welcome()
@@ -643,9 +656,6 @@ class AstroCLI:
 
                 self._start_timer()
                 prompt = await self._handle_user_prompt(user_input)
-                current_timestamp = get_datetime_now(to_local=True)
-                self._render_rule(build_response_start_rule_style(current_timestamp))
-
                 if prompt.startswith("/"):
                     # Lookup and execute registered slash commands.
                     command_name = prompt.split()[0]
@@ -667,8 +677,8 @@ class AstroCLI:
                     await self._stream_chat_response(prompt)
 
                 elapsed = self._stop_timer()
-                # self._print_timestamp(elapsed)
                 self._render_rule(build_response_end_rule_style(elapsed))
+                self._print_newline()
                 self._previous_response_duration = elapsed
                 self._state.save()
 

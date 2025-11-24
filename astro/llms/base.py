@@ -27,11 +27,13 @@ from pydantic_ai.models import infer_model as _infer_model
 from pydantic_ai.providers.ollama import OllamaProvider
 
 # --- Local Imports ---
+from astro.config import get_api_config
 from astro.logger import get_loggy
 from astro.typings import literal_to_list, options_to_str
 
 # --- GLOBALS ---
-loggy = get_loggy(__file__)
+_loggy = get_loggy(__file__)
+_api_config = get_api_config()
 
 
 def _is_ollama_identifier(identifier: str) -> bool:
@@ -40,7 +42,6 @@ def _is_ollama_identifier(identifier: str) -> bool:
 
 def _available_local_models() -> list[str]:
     return [f"ollama:{entry.model}" for entry in ollama.list().models]
-
 
 
 StrName: TypeAlias = Annotated[
@@ -59,7 +60,7 @@ class ModelDetails(BaseModel):
     def from_identifier(cls, identifier: str) -> "ModelDetails":
         # Empty identifier
         if len(identifier) == 0:
-            raise loggy.CreationError(
+            raise _loggy.CreationError(
                 object_type=ModelDetails, reason="Empty identifier"
             )
 
@@ -80,6 +81,9 @@ class ModelDetails(BaseModel):
             return ModelDetails(
                 name=name, provider=provider, source="pydantic_ai", internal=identifier
             )
+
+    def is_runnable(self) -> bool:
+        return _api_config.is_set(self.provider)
 
     def to_identifier(self) -> str:
         if self.variant is None:
@@ -119,7 +123,7 @@ class KnownModels:
 
         # No models registered -> Panic
         if len(models) == 0:
-            raise loggy.RuntimeError(
+            raise _loggy.RuntimeError(
                 "No models registered on import", all_models=all_models
             )
 
@@ -156,8 +160,8 @@ class KnownModels:
                 ):
                     result.append(ModelDetails.from_identifier(identifier))
             except Exception as error:
-                loggy.exception(error)
-                loggy.warning(f"Failed to register model: {identifier!r}")
+                _loggy.exception(error)
+                _loggy.warning(f"Failed to register model: {identifier!r}")
         return result
 
     @classmethod
@@ -215,7 +219,7 @@ class KnownModels:
     @classmethod
     def parse(cls, identifier: str) -> ModelDetails:
         if not cls.is_valid_identifier(identifier):
-            raise loggy.ValueError(
+            raise _loggy.ValueError(
                 f"Invalid model identifier {identifier!r}. "
                 "See KnownModels.identifiers() for available valid identifiers",
                 identifier=identifier,
@@ -267,7 +271,6 @@ _ALLOWED_ONLINE_MODELS = {
     "openai:o4-mini",
     "openai:o4-mini-deep-research",
 }
-
 # Initialize KnownModels (once)
 KnownModels._init_class(_MODELS, _ALLOWED_PROVIDERS, _ALLOWED_ONLINE_MODELS)
 
@@ -277,7 +280,7 @@ def infer_model(model_details: ModelDetails) -> Model:
     # NOTE: Restricting for now
     if model_details.provider not in _ALLOWED_PROVIDERS:
         error_msg = options_to_str(list(_ALLOWED_PROVIDERS), with_repr=True)
-        raise loggy.NotImplementedError(
+        raise _loggy.NotImplementedError(
             f"Astro does not support {model_details.provider!r}. Try: {error_msg}"
         )
     if (
@@ -285,10 +288,10 @@ def infer_model(model_details: ModelDetails) -> Model:
         and model_details.source != "ollama"
     ):
         error_msg = options_to_str(list(_ALLOWED_ONLINE_MODELS), with_repr=True)
-        raise loggy.NotImplementedError(
+        raise _loggy.NotImplementedError(
             f"Astro does not support online model {model_details.internal!r}. Try Ollama models or {error_msg}"
         )
-    # Ollama model
+    # OpenAI
     if model_details.source == "ollama":  # Only Ollama for now
         from pydantic_ai.models.openai import OpenAIChatModel
 
@@ -304,7 +307,7 @@ def infer_model(model_details: ModelDetails) -> Model:
 def create_llm_model(identifier: str) -> Model:
     # Input validation
     if not isinstance(identifier, str):
-        raise loggy.ExpectedVariableType(
+        raise _loggy.ExpectedVariableType(
             var_name="identifier",
             expected=str,
             got=type(identifier),
@@ -314,9 +317,23 @@ def create_llm_model(identifier: str) -> Model:
     # Parse identifier
     model_details = KnownModels.parse(identifier)
 
+    # Check if runnable
+    if not model_details.is_runnable():
+        raise _loggy.ValueError(
+            f"Model {identifier!r} is not runnable. Check if the API is set.",
+            model_details=str(model_details),
+        )
+
     # Return the inferred model
     return infer_model(model_details)
 
+
+# --- Exports ---
+__all__ = [
+    "ModelDetails",
+    "KnownModels",
+    "create_llm_model",
+]
 
 if __name__ == "__main__":
     # List all models

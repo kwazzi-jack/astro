@@ -11,7 +11,7 @@ import textwrap
 from collections.abc import Callable, Iterable
 from dataclasses import dataclass
 from datetime import datetime
-from typing import Literal, TypeAlias, overload
+from typing import Literal
 
 # --- External Imports ---
 from colour import Color
@@ -30,19 +30,20 @@ from pygments.token import Generic, Name, Text
 from rich.align import Align as RichAlign
 from rich.console import Group
 from rich.theme import Theme
-from rich.markdown import Markdown
 
 # --- Local Imports ---
+from astro.config import get_api_config
 from astro.llms.base import KnownModels, ModelDetails
 from astro.logger import get_loggy
 from astro.meta import get_astro_version
 from astro.typings import (
-    DateTimeFactory,
+    DateTimeFn,
     HTMLDict,
-    HTMLFactory,
+    HTMLFn,
+    MarkupFn,
     PTKDecoration,
     StrDict,
-    StringFactory,
+    StrFn,
 )
 from astro.utilities.display import get_terminal_width
 from astro.utilities.timing import get_time_str, seconds_to_strtime
@@ -71,6 +72,8 @@ def _apply_strikethrough_html(text: str) -> str:
     """Applies the strikethrough html tags to text."""
     return f"<s>{text}</s>"
 
+
+# --- Markdown Format Helpers ---
 def _apply_bold_md(text: str) -> str:
     """Applies the bold on markdown text."""
     return f"**{text}**"
@@ -84,6 +87,70 @@ def _apply_italic_md(text: str) -> str:
 def _apply_strikethrough_md(text: str) -> str:
     """Applies the strikethrough on markdown text."""
     return f"~~{text}~~"
+
+
+def _apply_code_md(text: str) -> str:
+    """Applies inline code formatting on markdown text."""
+    return f"`{text}`"
+
+
+def _apply_link_md(text: str, url: str) -> str:
+    """Applies link formatting on markdown text.
+
+    Args:
+        text: Display text for the link.
+        url: URL destination for the link.
+
+    Returns:
+        Markdown formatted link string.
+    """
+    return f"[{text}]({url})"
+
+
+def _apply_blockquote_md(text: str) -> str:
+    """Applies blockquote formatting on markdown text."""
+    return f"> {text}"
+
+
+def _apply_heading_md(text: str, level: int = 1) -> str:
+    """Applies heading formatting on markdown text.
+
+    Args:
+        text: Heading text content.
+        level: Heading level from 1 to 6. Defaults to 1.
+
+    Returns:
+        Markdown formatted heading string.
+
+    Raises:
+        ValueError: If level is not between 1 and 6.
+    """
+    if not 1 <= level <= 6:
+        raise ValueError(f"Heading level must be between 1 and 6, got {level}")
+    return f"{'#' * level} {text}"
+
+
+def _apply_unordered_list_item_md(text: str) -> str:
+    """Applies unordered list item formatting on markdown text."""
+    return f"- {text}"
+
+
+def _apply_ordered_list_item_md(text: str, number: int = 1) -> str:
+    """Applies ordered list item formatting on markdown text.
+
+    Args:
+        text: List item text content.
+        number: List item number. Defaults to 1.
+
+    Returns:
+        Markdown formatted ordered list item string.
+    """
+    return f"{number}. {text}"
+
+
+def _apply_horizontal_rule_md() -> str:
+    """Applies horizontal rule formatting in markdown."""
+    return "---"
 
 
 def _get_ptk_app_width() -> int:
@@ -180,13 +247,13 @@ def _apply_rich_style1(
 
     # Whether to format trailing spaces
     if ignore_trailing_spaces:
-        leading_count = len(text) - len(text.lstrip())
-        trailing_count = len(text) - len(text.rstrip())
+        escaped_text = escape_rich_markup(text)
+        leading_count = len(escaped_text) - len(escaped_text.lstrip())
+        trailing_count = len(escaped_text) - len(escaped_text.rstrip())
         stripped_text = text.strip()
-        escaped_text = escape_rich_markup(stripped_text)
-        result = " " * leading_count + escaped_text + " " * trailing_count
+        result = " " * leading_count + stripped_text + " " * trailing_count
     else:
-        result = escaped_text
+        result = text
 
     # Build style parts
     style_parts = []
@@ -226,8 +293,6 @@ def _apply_rich_style2(text: str, style: AstroStyle | None = None) -> str:
     return _apply_rich_style1(
         text, **style.model_dump() if style is not None else AstroStyle().model_dump()
     )
-
-def _apply_markdown_style1(text: str, style: AstroStyle | None = None) -> Markdown:
 
 
 def join_html_obj(*objs: HTML | str, separator: str = "") -> HTML:
@@ -274,9 +339,9 @@ class PromptConfiguration:
             Defaults to CursorShape.BLINKING_BLOCK.
     """
 
-    prompt_prefix: HTMLFactory
+    prompt_prefix: HTMLFn
     placeholder: HTML
-    bottom_toolbar: StringFactory
+    bottom_toolbar: StrFn
     completer: Completer
     lexer_cls: type[RegexLexer]
     style: BaseStyle
@@ -349,12 +414,12 @@ def create_ptk_prompt_prefix(
 
 
 def create_ptk_prompt_prefix_factory(
-    name_or_provider: str | StringFactory,
-    symbol_or_provider: str | StringFactory = "⟩",
+    name_or_provider: str | StrFn,
+    symbol_or_provider: str | StrFn = ">",
     name_style: AstroStyle | None = None,
     symbol_style: AstroStyle | None = None,
     append_spaces: int | None = None,
-) -> HTMLFactory:
+) -> HTMLFn:
     # Normalize providers to callable functions
     if callable(name_or_provider):
         name_provider = name_or_provider
@@ -387,15 +452,50 @@ def create_rich_prompt_prefix(
     symbol: str = "⟩",
     name_style: AstroStyle | None = None,
     symbol_style: AstroStyle | None = None,
-    append_spaces: int | None = None,
+    delimiter: str = "",
+    trailing_spaces: int | None = None,
 ) -> str:
     name_markup = _apply_rich_style2(name, style=name_style)
     symbol_markup = _apply_rich_style2(symbol, style=symbol_style)
     return (
-        name_markup + symbol_markup + " " * append_spaces
-        if append_spaces is not None and append_spaces >= 0
+        name_markup + delimiter + symbol_markup + " " * trailing_spaces
+        if trailing_spaces is not None and trailing_spaces >= 0
         else ""
     )
+
+
+def create_rich_prompt_prefix_factory(
+    name_or_provider: str | StrFn,
+    symbol_or_provider: str | StrFn = "⟩",
+    name_style: AstroStyle | None = None,
+    symbol_style: AstroStyle | None = None,
+    append_spaces: int | None = None,
+) -> MarkupFn:
+    # Normalize providers to callable functions
+    if callable(name_or_provider):
+        name_provider = name_or_provider
+    else:
+
+        def name_provider() -> str:
+            return name_or_provider
+
+    if callable(symbol_or_provider):
+        symbol_provider = symbol_or_provider
+    else:
+
+        def symbol_provider() -> str:
+            return symbol_or_provider
+
+    def create_prompt_inner() -> str:
+        return create_rich_prompt_prefix(
+            name_provider(),
+            symbol_provider(),
+            name_style=name_style,
+            symbol_style=symbol_style,
+            trailing_spaces=append_spaces,
+        )
+
+    return create_prompt_inner
 
 
 def create_user_prompt_style() -> AstroStyle:
@@ -411,9 +511,9 @@ def create_system_prompt_style() -> AstroStyle:
 
 
 def create_bottom_toolbar_factory(
-    model_identifier_provider: StringFactory,
-    datetime_provider: DateTimeFactory,
-) -> StringFactory:
+    model_identifier_provider: StrFn,
+    datetime_provider: DateTimeFn,
+) -> StrFn:
     """Create a callable that renders the bottom toolbar with lightweight metadata.
 
     Args:
@@ -450,9 +550,9 @@ def create_bottom_toolbar_factory(
 
 
 def create_prompt_configuration(
-    username_provider: StringFactory,
-    model_identifier_provider: StringFactory,
-    datetime_provider: DateTimeFactory,
+    username_provider: StrFn,
+    model_identifier_provider: StrFn,
+    datetime_provider: DateTimeFn,
     command_metadata: StrDict,
     hashtag_metadata: StrDict,
 ) -> PromptConfiguration:
@@ -592,6 +692,7 @@ def build_response_start_rule_style(timestamp: datetime) -> RuleStyle:
         text=f"[{TEXT_DIM}]{formatted_timestamp}[/{TEXT_DIM}]",
         character="╌",
         style=BORDER_COLOR,
+        newline=False,
     )
 
 
@@ -619,15 +720,21 @@ class _ModelOptionValidator(Validator):
 
     def __init__(self, valid_options: set[str]):
         self._valid_options = valid_options
+        self._api_config = get_api_config()
 
     def validate(self, document) -> None:  # noqa: D401 - prompt toolkit signature
         text = document.text.strip()
-        if text in self._valid_options:
-            return
-        raise ValidationError(
-            message="Choose a valid option identifier.",
-            cursor_position=len(text),
-        )
+        if text not in self._valid_options:
+            raise ValidationError(
+                message="Choose a valid option identifier.",
+                cursor_position=len(text),
+            )
+
+        elif not self._api_config.is_set(text):
+            raise ValidationError(
+                message=f"{text!r} is not runnable - Ensure API is available"
+            )
+        return
 
 
 def prompt_model_selection() -> ModelSelectionResult:
@@ -1648,20 +1755,40 @@ def escape_rich_markup(text: str) -> str:
 
 
 if __name__ == "__main__":
-    text = "Hello, World!"
-    prompt(_apply_ptk_style1(text, fg=PRIMARY_COLOR))
-    prompt(_apply_ptk_style1(text, bg=PRIMARY_LIGHT))
-    prompt(_apply_ptk_style1(text, bold=True))
-    prompt(_apply_ptk_style1(text, italic=True))
-    prompt(_apply_ptk_style1(text, decoration="underline"))
-    prompt(_apply_ptk_style1(text, decoration="strikethrough"))
-    prompt(
-        _apply_ptk_style1(
-            text,
-            fg=PRIMARY_COLOR,
-            bg=BG_SECONDARY,
-            bold=True,
-            italic=True,
-            decoration="underline",
-        )
+    banner: str
+    width: int | None = None
+    seed: int | None = None
+    # Starfield controls:
+    base_density: float = 0.15
+    cluster_rate_per_1000: float = 4.0
+    cluster_mean_size: float = 5.0
+    cluster_row_std_cells: float = 1.0
+    cluster_col_std_cells: float = 2.0
+    pick_star: Callable[[random.Random], str] = _pick_star
+    random_generator = random.Random(seed)
+    star_grid: list[list[str]] = _generate_starfield_2d_clustered(
+        rows=10,
+        columns=shutil.get_terminal_size().columns if width is None else width,
+        base_density=base_density,
+        cluster_rate_per_1000=cluster_rate_per_1000,
+        cluster_mean_size=cluster_mean_size,
+        cluster_row_std_cells=cluster_row_std_cells,
+        cluster_col_std_cells=cluster_col_std_cells,
+        random_generator=random_generator,
+        pick_star=pick_star,
     )
+    # Colorify
+    _pick_star_color = {
+        ".": PRIMARY_LIGHT,
+        "·": PRIMARY_COLOR,
+        "˙": SECONDARY_DARK,
+        "•": SECONDARY_LIGHT,
+    }
+    colored_header = "\n".join("".join(line) for line in star_grid)
+    for ch, color in _pick_star_color.items():
+        colored_header = colored_header.replace(ch, f"[{color}]{ch}[/{color}]")
+    from rich import print as rprint
+
+    print("\n" * 3)
+    rprint(colored_header)
+    print("\n" * 3)

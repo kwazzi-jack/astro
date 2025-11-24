@@ -1,13 +1,34 @@
 """Time and datetime utilities used across Astro."""
 
 # --- Internal Imports ---
+from __future__ import annotations
+
+from collections.abc import Callable
 from datetime import datetime, timezone
-from time import time
+from time import time_ns
+from typing import TYPE_CHECKING, Literal
 
 # --- Local Imports ---
-from astro.typings import FloatFactory, InlineFn
+from astro.typings.base import (
+    literal_to_list,
+    options_to_str,
+)
+
+if TYPE_CHECKING:
+    from astro.typings.callables import FloatFn, InlineFn
 
 # --- Globals ---
+# Time Units and constants
+TimeUnit = Literal["hour", "min", "sec", "msec", "microsec", "nanosec"]
+_NANOSECONDS_CONVERSIONS = {
+    "hour": 1e9 * 3600,
+    "min": 1e9 * 60,
+    "sec": 1e9,
+    "msec": 1e6,
+    "microsec": 1e3,
+    "nanosec": 1.0,
+}
+
 
 # Datetime patterns and constants
 DEFAULT_DATETIME_PATTERN = "%H:%M:%S.%f%z, %A, %d %B %Y"
@@ -176,9 +197,49 @@ def seconds_to_strtime(value: float) -> str:
     return " ".join(parts)
 
 
-def create_timer() -> tuple[InlineFn, FloatFactory]:
+def create_time_converter(
+    input_unit: TimeUnit, output_unit: TimeUnit
+) -> Callable[[float], float]:
+    """Create a conversion function between two time units.
+
+    Args:
+        input_unit: Source time unit for the values that will be converted.
+        output_unit: Target time unit for the converted values.
+
+    Returns:
+        Callable[[float], float]: Converter function that scales numeric values from
+        input_unit to output_unit.
+
+    Raises:
+        ValueError: If an invalid input or output unit is provided.
+    """
+
+    # Input validation
+    if input_unit not in _NANOSECONDS_CONVERSIONS:
+        options = options_to_str(literal_to_list(TimeUnit), with_repr=True)
+        raise ValueError(f"Invalid argument {input_unit=}. Choose from {options}")
+    if output_unit not in _NANOSECONDS_CONVERSIONS:
+        options = options_to_str(literal_to_list(TimeUnit), with_repr=True)
+        raise ValueError(f"Invalid argument {output_unit=}. Choose from {options}")
+
+    # Get conversation factor
+    from_nano_factor = _NANOSECONDS_CONVERSIONS[input_unit]
+    to_unit_factor = _NANOSECONDS_CONVERSIONS[output_unit]
+    conv_factor = from_nano_factor / to_unit_factor
+
+    # Create converter function
+    def converter(value: float) -> float:
+        return value * conv_factor
+
+    return converter
+
+
+def create_timer(unit: TimeUnit = "sec") -> tuple[InlineFn, FloatFn]:
     """Create a simple manual timer utility.
 
+    Args:
+        time_unit (TimeUnit, optional): Unit for the returned elapsed time.
+            Defaults to "sec".
     Returns:
         (tuple[InlineFn, FloatFn]): Pair of callables
         where the first starts timing and the second stops timing, returning
@@ -190,6 +251,10 @@ def create_timer() -> tuple[InlineFn, FloatFactory]:
         >>> start()
         >>> _ = stop()
     """
+
+    # Create time converter function
+    converter = create_time_converter("nanosec", unit)
+
     # Initial timer start value
     start_value = 0.0
 
@@ -197,7 +262,7 @@ def create_timer() -> tuple[InlineFn, FloatFactory]:
     def start() -> None:
         """Starts the timer"""
         nonlocal start_value
-        start_value = time()
+        start_value = time_ns()
 
     # Stop function
     def stop() -> float:
@@ -209,10 +274,10 @@ def create_timer() -> tuple[InlineFn, FloatFactory]:
             return 0.0
 
         # Calculate total time taken
-        elapsed = time() - start_value
+        elapsed = time_ns() - start_value
 
         # Result time and return
         start_value = 0.0
-        return elapsed
+        return converter(elapsed)
 
     return start, stop

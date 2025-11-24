@@ -22,6 +22,7 @@ from astro.errors import (
     KeyTypeError,
     LoadError,
     NoEntryError,
+    ParseError,
     PythonErrorType,
     SaveError,
     SetupError,
@@ -30,7 +31,6 @@ from astro.errors import (
 from astro.typings import (
     NamedDict,
     StrPath,
-    _object_log_formatter,
     type_name,
 )
 
@@ -126,9 +126,7 @@ class _ExtraFormatter(logging.Formatter):
 
         # If there are extras, append them to the message
         if extras:
-            extra_parts = [
-                f"{key}={_object_log_formatter(value)}" for key, value in extras.items()
-            ]
+            extra_parts = [f"{key}={value}" for key, value in extras.items()]
             return f"{base_message} | {', '.join(extra_parts)}"
 
         return base_message
@@ -1169,6 +1167,50 @@ class Loggy:
         return self._log_and_return_astro_error(
             error=CreationError(
                 object_type=object_type, reason=reason, extra=extra, caused_by=caused_by
+            ),
+            caused_by=caused_by,
+            warning=warning,
+            skip_error_log=skip_error_log,
+        )
+
+    def ParseError(
+        self,
+        *,
+        type_to_parse: type,
+        value_to_parse: Any,
+        expected_type: type,
+        reason: str | None = None,
+        caused_by: AstroError | Exception | None = None,
+        warning: str | None = None,
+        skip_error_log: bool = False,
+        **extra: Any,
+    ) -> ParseError:
+        """Creates, logs, and returns a ParseError.
+
+        Args:
+            type_to_parse (type): The type being parsed from.
+            value_to_parse (Any): The value being parsed.
+            expected_type (type): The type expected after parsing.
+            reason (str | None, optional): The reason why parsing failed. Defaults to None.
+            caused_by (AstroError | Exception | None, optional): The error to wrap. Defaults to None.
+            warning (str | None, optional): An optional warning message to log before the error. Defaults to None.
+            skip_error_log (bool, optional): If True, logging is skipped. Defaults to False.
+            extra (Any, optional): Additional details to include in the log.
+
+        Returns:
+            ParseError: The created error instance.
+        """
+        if warning is not None:
+            self.warning(warning)
+
+        return self._log_and_return_astro_error(
+            error=ParseError(
+                type_to_parse=type_to_parse,
+                value_to_parse=value_to_parse,
+                expected_type=expected_type,
+                reason=reason,
+                extra=extra,
+                caused_by=caused_by,
             ),
             caused_by=caused_by,
             warning=warning,

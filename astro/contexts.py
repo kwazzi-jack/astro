@@ -1,15 +1,15 @@
-"""Context providers for Astro's language model workflows."""
+"""Context providers for Astro's workflows."""
 
 # --- Internal Imports ---
-from abc import ABC, abstractmethod
 from datetime import datetime
 
 # --- External Imports ---
-from pydantic import BaseModel, computed_field
+from pydantic import computed_field
 
 # --- Local Imports ---
 from astro.logger import get_loggy
-from astro.typings import NamedDict, StrDict
+from astro.typings.base import StrDict
+from astro.typings.contexts import Context
 from astro.utilities.timing import (
     get_datetime_now,
     get_datetime_str,
@@ -18,25 +18,6 @@ from astro.utilities.timing import (
 
 # --- Globals ---
 _loggy = get_loggy(__file__)
-
-
-class Context(BaseModel, ABC):
-    """Base class for collective context objects aggregating multiple information sources.
-
-    Provides a foundation for classes that combine various information types.
-    """
-
-    @classmethod
-    def contains(cls, value: str) -> bool:
-        if not isinstance(value, str):
-            raise _loggy.ExpectedTypeError(
-                expected=str, got=type(value), with_value=value
-            )
-        return value in cls.model_fields or value in cls.model_computed_fields
-
-    @abstractmethod
-    def to_formatted(self) -> NamedDict:
-        raise _loggy.NotImplementedError("Subclasses of Context must implement this")
 
 
 class NoneContext(Context):
@@ -77,6 +58,17 @@ def select_context_type(cls_name: str) -> type[Context]:
     }
 
     if cls_name not in context_classes:
-        raise _loggy.ValueError(f"Cannot find context type associated with {cls_name!r}")
+        raise _loggy.ValueError(
+            f"Cannot find context type associated with {cls_name!r}"
+        )
 
     return context_classes[cls_name]
+
+
+# --- Exports ---
+__all__ = [
+    "Context",
+    "NoneContext",
+    "ChatContext",
+    "select_context_type",
+]

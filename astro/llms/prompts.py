@@ -10,7 +10,7 @@ from jinja2 import Environment, FileSystemLoader, Template, meta, select_autoesc
 from pydantic_ai import ModelRequest, ModelResponse, SystemPromptPart, TextPart
 
 # --- Local Imports ---
-from astro.llms.contexts import ChatContext, Context, select_context_type
+from astro.contexts import Context, select_context_type
 from astro.logger import get_loggy
 from astro.paths import get_module_dir
 from astro.typings import NamedDict, options_to_str
@@ -147,3 +147,12 @@ def create_assistant_message(text: str) -> ModelResponse:
 
 def create_system_message(text: str) -> ModelRequest:
     return ModelRequest(parts=[SystemPromptPart(content=text)])
+
+
+# --- Exports ---
+__all__ = [
+    "PromptTags",
+    "get_prompt_template",
+    "create_assistant_message",
+    "create_system_message",
+]

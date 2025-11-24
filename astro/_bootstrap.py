@@ -30,4 +30,4 @@ def _run_astro_cli() -> None:
     # Run astro cli
     from astro.app.cli import AstroCLI
 
-    asyncio.run(AstroCLI().run())
+    AstroCLI().run()

@@ -3,7 +3,7 @@ from importlib import metadata
 
 # --- Local Imports ---
 from astro.__version__ import version
-from astro.typings import NamedDict
+from astro.typings.base import NamedDict
 
 
 def get_astro_version() -> str:

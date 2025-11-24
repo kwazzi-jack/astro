@@ -5,7 +5,7 @@ from pathlib import Path
 from typing import Any, TypeVar
 
 # --- Local Imports ---
-from astro.typings import (
+from astro.typings.base import (
     NamedDict,
     StrPath,
     get_path_type,
@@ -491,3 +491,58 @@ class CreationError(AstroError):
 
         # Construct parent
         super().__init__(message=message, extra=extra, caused_by=caused_by)
+
+
+class ParseError(AstroError):
+    """Raised when an error occurs during parsing of data."""
+
+    def __init__(
+        self,
+        *,
+        type_to_parse: type,
+        value_to_parse: Any,
+        expected_type: type,
+        reason: str | None = None,
+        extra: NamedDict | None = None,
+        caused_by: Exception | None = None,
+    ):
+        # Error details
+        extra = extra or {}
+        type_to_parse_name = type_name(type_to_parse)
+        expected_type_name = type_name(expected_type)
+        extra["type_to_parse"] = type_to_parse_name
+        extra["value_to_parse"] = value_to_parse
+        extra["expected_type"] = expected_type_name
+
+        message = f"Error while parsing {value_to_parse} ({type_to_parse_name}) to type {expected_type_name}"
+        if reason is not None and len(reason.strip()) > 0:
+            extra["reason"] = reason
+            message += f": {reason}"
+        elif caused_by is not None:
+            message += " (see original error)"
+        else:
+            extra["reason"] = "unspecified"
+            message += " (unspecified)"
+
+        # Construct parent
+        super().__init__(message=message, extra=extra, caused_by=caused_by)
+
+
+# --- Exports ---
+__all__ = [
+    "AstroError",
+    "AstroDatabaseError",
+    "SetupError",
+    "ExpectedVariableType",
+    "ExpectedElementTypeError",
+    "ExpectedTypeError",
+    "KeyTypeError",
+    "KeyStrError",
+    "ValueTypeError",
+    "EmptyStructureError",
+    "NoEntryError",
+    "LoadError",
+    "SaveError",
+    "CreationError",
+    "ParseError",
+]
