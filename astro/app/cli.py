@@ -1,8 +1,11 @@
 """CLI entrypoint for the Astro interactive shell."""
 
+from __future__ import annotations
+
 # --- Internal Imports ---
 import asyncio
 import inspect
+from collections.abc import Sequence
 from dataclasses import dataclass
 from typing import Any
 
@@ -18,6 +21,7 @@ from rich.text import Text
 
 # --- Local Imports ---
 from astro.agents.chat import create_astro_stream
+from astro.contexts import ChatContext
 from astro.app.chat_stream import ChatStreamRenderer
 from astro.app.state import _AppState
 from astro.logger import get_loggy
@@ -45,7 +49,7 @@ from astro.theme import (
     prompt_model_selection,
 )
 from astro.typings import MessageList
-from astro.typings.callables import AnyFn, StreamFn
+from astro.typings.callables import AgentFn, AgentFnSequence, AnyFn, StreamFn
 from astro.utilities.timing import create_timer, get_datetime_now, seconds_to_strtime
 
 # --- GLOBALS ---
@@ -128,17 +132,36 @@ class CommandSpec:
 
 # -- CLI ---
 class AstroCLI:
-    """Interactive shell for Astro commands."""
+    """Interactive shell for Astro commands.
 
-    def __init__(self, overwrite_state: bool = False):
+    Attributes:
+        _state (_AppState): Persisted application state backing the CLI.
+        _prompt_config (PromptConfiguration): Prompt rendering configuration.
+    """
+
+    def __init__(
+        self,
+        overwrite_state: bool = False,
+        *,
+        tools: AgentFn[ChatContext]
+        | AgentFnSequence[ChatContext]
+        | None = None,
+        instructions: str | Sequence[str] | None = None,
+    ) -> None:
         """Initialise the Astro CLI shell.
 
         Args:
             overwrite_state (bool): Optional flag indicating whether to
                 overwrite the existing persisted application state when missing.
                 Defaults to False.
+            tools (AgentFn[ChatContext] | AgentFnSequence[ChatContext] | None):
+                Optional tool definitions injected into the chat agent.
+            instructions (str | Sequence[str] | None): Optional extra
+                instruction blocks appended to the agent's system prompt.
         """
 
+        self._tools = tools
+        self._instructions = instructions
         self._state = self._load_appstate(overwrite_state)
         self._console = Console(theme=make_rich_theme())
 
@@ -308,7 +331,11 @@ class AstroCLI:
 
         identifier = self._state.current_model.to_identifier()
         try:
-            stream_fn, message_history = create_astro_stream(identifier)
+            stream_fn, message_history = create_astro_stream(
+                identifier,
+                tools=self._tools,
+                instructions=self._instructions,
+            )
         except Exception as error:  # pragma: no cover - defensive guard
             _loggy.exception(
                 "Failed to initialise chat agent",
