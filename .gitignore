@@ -175,6 +175,15 @@ cython_debug/
 
 # VSCode file
 .vscode/
+AGENTS.md
+GEMINI.md
+IMPLEMENTATION_SUMMARY.md
+STORAGE_ARCHITECTURE.md
 
 # Other
 trash/
+test-outputs/
+**/*.jsonl
+logs/
+**/*.dbnotes.md
+notes.md
