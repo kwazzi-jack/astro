@@ -3,7 +3,7 @@
         { name = "Brian Welman", email = "brianallisterwelman@gmail.com" },
         { name = "Casey Chuma", email = "caseymovex@gmail.com" },
     ]
-    name = "astro"
+    name = "ratt-astro"
     dynamic = ["version"]
     description = "Radio Astronomy AI Assistant"
     readme = "README.md"
