@@ -188,3 +188,4 @@ logs/
 **/*.dbnotes.md
 notes.md
 
+astro/__version__.py
